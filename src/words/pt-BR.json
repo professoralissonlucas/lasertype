@@ -1,0 +1,38 @@
+{
+  "easy": [
+    "sol", "lua", "mar", "céu", "rio", "luz", "paz", "cor", "flor", "casa",
+    "gato", "cão", "pão", "mão", "fogo", "água", "terra", "vento", "chuva", "neve",
+    "gelo", "nuvem", "ilha", "praia", "areia", "pedra", "folha", "raiz", "fruta", "mel",
+    "sal", "leite", "café", "chá", "ovo", "bolo", "doce", "uva", "pera", "maçã",
+    "limão", "melão", "coco", "arroz", "milho", "peixe", "ave", "pato", "lobo", "urso",
+    "sapo", "rato", "boi", "vaca", "cabra", "porco", "leão", "tigre", "zebra", "onça",
+    "foca", "mesa", "porta", "raio", "cama", "livro", "papel", "lápis", "onda", "prato",
+    "garfo", "faca", "chave", "carro", "barco", "trem", "avião", "rua", "ponte", "campo",
+    "monte", "vale", "verde", "azul", "rosa", "roxo", "preto", "cinza", "feliz", "forte",
+    "lento", "frio", "noite", "nave", "alvo", "amor", "vida", "sonho", "jogo", "bola"
+  ],
+  "medium": [
+    "planeta", "estrela", "foguete", "cometa", "galáxia", "meteoro", "cosmos", "escudo", "canhão", "energia",
+    "plasma", "satélite", "missão", "piloto", "capitão", "viagem", "montanha", "floresta", "deserto", "vulcão",
+    "oceano", "aurora", "eclipse", "circuito", "bateria", "monitor", "teclado", "janela", "internet", "mensagem",
+    "imagem", "história", "ciência", "castelo", "dragão", "mágico", "mistério", "enigma", "jardim", "laranja",
+    "banana", "cereja", "morango", "abacaxi", "melancia", "manteiga", "pimenta", "cebola", "batata", "cenoura",
+    "tomate", "alface", "feijão", "macarrão", "sorvete", "biscoito", "coragem", "verdade", "amizade", "saudade",
+    "alegria", "tristeza", "silêncio", "caminho", "coração", "emoção", "canção", "música", "pintura", "desenho",
+    "escola", "caderno", "borracha", "mochila", "relógio", "espelho", "cadeira", "armário", "girafa", "elefante",
+    "macaco", "coelho", "cavalo", "golfinho", "tubarão", "pinguim", "coruja", "raposa", "abelha", "formiga",
+    "quintal", "quadrado", "círculo", "xícara", "jaqueta", "ônibus", "baleia", "branco", "rápido", "órbita"
+  ],
+  "hard": [
+    "astronauta", "espaçonave", "telescópio", "constelação", "observatório", "trajetória", "propulsão", "aceleração", "velocidade", "gravidade",
+    "horizonte", "computador", "eletricidade", "temperatura", "atmosfera", "laboratório", "experimento", "microscópio", "transmissor", "frequência",
+    "amplitude", "algoritmo", "processador", "interestelar", "supernova", "comprimento", "descoberta", "conhecimento", "maravilhoso", "excelente",
+    "importante", "calculadora", "dicionário", "enciclopédia", "universidade", "comunidade", "informação", "tecnologia", "filosofia", "psicologia",
+    "matemática", "geografia", "astronomia", "celebração", "imaginação", "determinação", "oportunidade", "comunicação", "independência", "desempenho",
+    "restaurante", "chocolate", "hipopótamo", "rinoceronte", "borboleta", "tartaruga", "crocodilo", "cachoeira", "relâmpago", "tempestade",
+    "terremoto", "arquipélago", "paralelepípedo", "helicóptero", "submarino", "bicicleta", "motocicleta", "caminhonete", "liberdade", "cavaleiro",
+    "triângulo", "ventilador", "aventureiro", "magnetismo", "radioatividade", "comprimido", "dinossauro", "esqueleto", "fantástico", "quilômetro",
+    "quarentena", "zoológico", "jornalista", "labirinto", "protótipo", "navegação", "exploração", "holográfico", "ultravioleta", "vocabulário",
+    "civilização", "gravitacional", "intergaláctico", "geladeira", "televisão", "biblioteca", "professor", "estudante", "presidente", "aniversário"
+  ]
+}

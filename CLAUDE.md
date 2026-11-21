@@ -100,6 +100,7 @@ firestore.rules
 - Game loop com **timestep fixo** (60 updates/s) e render interpolado; nada de lógica dependente de FPS.
 - Aleatoriedade sempre via `utils/rng.ts` (seedável) para o Desafio Diário ser idêntico para todos.
 - Números de balanceamento ficam em `config.ts`, nunca soltos no código.
+- Testes ficam ao lado do código (`*.test.ts`).
 - Object pooling para partículas e lasers (evitar garbage collection durante a partida).
 - Canvas com suporte a `devicePixelRatio` e redimensionamento.
 - Nomes de código em inglês; textos da interface em pt-BR (com suporte a EN via arquivo de strings em `ui/i18n.ts`).
@@ -113,7 +114,7 @@ firestore.rules
 - Entrada normalizada: minúsculas; acentos removidos por padrão (`ação` aceita `acao`). Opção "Acentos obrigatórios" nas configurações.
 - Sem alvo travado: a tecla escolhe a palavra que começa com ela, mais próxima do perímetro.
 - Com alvo travado: letra certa = tiro + letra acesa; letra errada = erro (zera combo, mantém o alvo).
-- `Backspace` destrava o alvo. `Esc` pausa. `Tab` reinicia. `Espaço` ativa o EMP (se carregado).
+- `Backspace` destrava o alvo (e zera o progresso daquela palavra). `Esc` pausa. `Tab` reinicia. `Espaço` ativa o EMP (se carregado).
 
 ### Sistemas
 - **Combo:** cada palavra sem erro +1. Multiplicador: 1x (0–4), 2x (5–14), 3x (15–29), 4x (30+).
@@ -231,7 +232,7 @@ scores/{id}     → { uid, name, score, wpm, accuracy, mode, lang, date, created
 
 ## 10. Deploy (GitHub Pages)
 
-- `vite.config.ts`: `base: '/<nome-do-repo>/'`.
+- `vite.config.ts`: `base: '/lasertype/'`.
 - Workflow `.github/workflows/deploy.yml`: build no push para `main` e publica `dist/` com `actions/deploy-pages`.
 - Config do Firebase via variáveis `VITE_FIREBASE_*` (arquivo `.env.local` fora do git; secrets no GitHub Actions).
 - Adicionar o domínio `<usuario>.github.io` em Authentication → Domínios autorizados no Firebase.
@@ -242,7 +243,14 @@ scores/{id}     → { uid, name, score, wpm, accuracy, mode, lang, date, created
 
 Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que foi feito.
 
-- [ ] **Fase 1 — Base:** Vite + TS, game loop, spawn de palavras, digitação, mira, laser básico, perímetro, escudo.
+- [x] **Fase 1 — Base:** Vite + TS, game loop, spawn de palavras, digitação, mira, laser básico, perímetro, escudo.
+  - Loop com timestep fixo (`game/timestep.ts`) + render interpolado; canvas com DPR e resize (`render/renderer.ts`).
+  - **Coordenadas normalizadas:** `x ∈ [0,1]` na largura do campo, `y = 0` no topo e `y = 1` no perímetro; velocidades em "alturas de campo por segundo" (tempo de queda igual em qualquer tela). Conversão para pixels só em `render/layout.ts`.
+  - **Spawner determinístico:** a sequência (palavra, x, velocidade) depende só da seed e do histórico do próprio spawner, nunca das ações do jogador; o timing é separado. Evita repetir palavras recentes e, quando possível, iniciais das últimas 5 palavras.
+  - Lógica emite `GameEvent`s (`hit`, `destroy`, `breach`, `miss`...) que a apresentação consome — ponto de encaixe para partículas/sons da Fase 2.
+  - Listas: ~100 palavras por dificuldade (fácil 3–5 letras, média 6–8, difícil 9–14) em pt-BR e en.
+  - Parâmetros de URL provisórios (até existir a tela de configurações): `?lang=en`, `?seed=abc`, `?accents=1`.
+  - Fontes Orbitron/JetBrains Mono ainda não estão em `public/fonts/`; CSS e canvas usam fallbacks do sistema.
 - [ ] **Fase 2 — Juice:** laser com glow, partículas, explosão, screen shake, recuo do canhão, sons.
 - [ ] **Fase 3 — Sistemas:** combo, ondas, palavras especiais, EMP, pausa, modos.
 - [ ] **Fase 4 — Telas:** menu, HUD completo, Mission Report, configurações (localStorage).

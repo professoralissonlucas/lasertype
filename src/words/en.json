@@ -1,0 +1,38 @@
+{
+  "easy": [
+    "sun", "moon", "star", "sky", "ship", "fire", "ice", "wind", "rain", "snow",
+    "tree", "leaf", "rock", "sand", "wave", "fish", "bird", "wolf", "bear", "frog",
+    "cat", "dog", "owl", "fox", "bee", "ant", "cup", "pen", "box", "key",
+    "map", "hat", "car", "bus", "jet", "road", "path", "door", "wall", "roof",
+    "lamp", "bell", "ring", "coin", "gold", "iron", "salt", "milk", "rice", "corn",
+    "bread", "cake", "egg", "tea", "fast", "slow", "cold", "warm", "dark", "light",
+    "blue", "red", "pink", "gray", "green", "black", "white", "happy", "calm", "brave",
+    "quick", "zone", "beam", "core", "gear", "nova", "orbit", "laser", "solar", "comet",
+    "alien", "robot", "pixel", "radar", "hero", "king", "queen", "jump", "run", "fly",
+    "swim", "push", "pull", "grab", "kick", "yell", "zero", "joy", "vote", "unit"
+  ],
+  "medium": [
+    "planet", "rocket", "galaxy", "meteor", "cosmic", "shield", "cannon", "target", "signal", "engine",
+    "energy", "plasma", "photon", "quasar", "vector", "matrix", "sector", "beacon", "portal", "crystal",
+    "thunder", "lantern", "journey", "mission", "captain", "harbor", "island", "forest", "desert", "canyon",
+    "valley", "glacier", "volcano", "horizon", "sunrise", "eclipse", "nebula", "gravity", "impulse", "voltage",
+    "circuit", "battery", "monitor", "keyboard", "printer", "network", "browser", "picture", "gallery", "history",
+    "science", "kingdom", "dragon", "castle", "knight", "wizard", "potion", "legend", "mystery", "puzzle",
+    "riddle", "garden", "flower", "orange", "banana", "cherry", "coffee", "cookie", "butter", "cheese",
+    "pepper", "silver", "copper", "bronze", "marble", "velvet", "yellow", "purple", "violet", "silence",
+    "whisper", "freedom", "balance", "courage", "quantum", "zephyr", "jungle", "unicorn", "voyager", "wonder",
+    "explore", "defend", "escape", "rescue", "launch", "reflect", "ancient", "distant", "golden", "frozen"
+  ],
+  "hard": [
+    "spaceship", "astronaut", "satellite", "telescope", "adventure", "lightning", "hurricane", "waterfall", "atmosphere", "laboratory",
+    "experiment", "microscope", "generator", "transmitter", "frequency", "amplitude", "algorithm", "processor", "framework", "interface",
+    "dimension", "constellation", "observatory", "trajectory", "propulsion", "acceleration", "magnetism", "radiation", "intergalactic", "interstellar",
+    "supernova", "wavelength", "spacecraft", "checkpoint", "discovery", "knowledge", "beautiful", "challenge", "dangerous", "excellent",
+    "important", "wonderful", "calculator", "dictionary", "encyclopedia", "university", "government", "community", "environment", "information",
+    "technology", "philosophy", "psychology", "mathematics", "chemistry", "geography", "astronomy", "celebration", "imagination", "determination",
+    "opportunity", "communication", "independence", "achievement", "performance", "restaurant", "chocolate", "strawberry", "blueberry", "watermelon",
+    "pineapple", "butterfly", "crocodile", "hippopotamus", "rhinoceros", "chameleon", "jellyfish", "porcupine", "quarantine", "questionnaire",
+    "quicksilver", "zookeeper", "xylophone", "yesterday", "vocabulary", "ultraviolet", "underwater", "kilometer", "journalist", "labyrinth",
+    "nightmare", "overwhelm", "prototype", "temperature", "electricity", "civilization", "holographic", "navigation", "gravitational", "exploration"
+  ]
+}

@@ -1,0 +1,172 @@
+@import './tokens.css';
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-display);
+}
+
+#app {
+  position: fixed;
+  inset: 0;
+}
+
+.game-canvas {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+}
+
+/* ---------- HUD ---------- */
+
+.hud {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  user-select: none;
+}
+
+.hud__top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 16px;
+  padding: 18px 20px;
+  font-size: 13px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+}
+
+.hud__group {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.hud__label {
+  color: var(--muted);
+}
+
+.hud__value {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  color: var(--text);
+}
+
+.hud__pips {
+  display: inline-flex;
+  gap: 6px;
+}
+
+.hud__pip {
+  width: 22px;
+  height: 10px;
+  border: 1px solid var(--primary);
+  border-radius: 2px;
+  background: var(--primary);
+}
+
+.hud__pip--empty {
+  border-color: var(--muted);
+  background: transparent;
+}
+
+.hud__group--danger .hud__pip:not(.hud__pip--empty) {
+  border-color: var(--danger);
+  background: var(--danger);
+}
+
+.hud__hint {
+  position: absolute;
+  left: 20px;
+  bottom: 14px;
+  max-width: calc(50% - 60px);
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.06em;
+}
+
+/* No room beside the cannon on narrow screens (mobile support is Phase 7). */
+@media (max-width: 720px) {
+  .hud__hint {
+    display: none;
+  }
+}
+
+/* ---------- Game over ---------- */
+
+.overlay {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(5 7 15 / 0.72);
+}
+
+.overlay[hidden] {
+  display: none;
+}
+
+.overlay__panel {
+  width: min(380px, 100%);
+  padding: 32px 28px;
+  border: 1px solid var(--danger);
+  border-radius: 6px;
+  background: var(--bg);
+  text-align: center;
+}
+
+.overlay__title {
+  margin: 0 0 24px;
+  color: var(--danger);
+  font-size: 26px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.overlay__stats {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 10px 24px;
+  margin: 0 0 28px;
+  text-align: left;
+}
+
+.overlay__stats dt {
+  color: var(--muted);
+  font-size: 13px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.overlay__stats dd {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: 16px;
+  text-align: right;
+}
+
+.overlay__hint {
+  margin: 0;
+  color: var(--primary);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}

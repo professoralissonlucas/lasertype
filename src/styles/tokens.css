@@ -1,0 +1,13 @@
+/* Palette — mirrored in src/game/render/palette.ts */
+:root {
+  --bg: #05070f;
+  --primary: #22d3ee;
+  --danger: #ff2e88;
+  --combo: #fbbf24;
+  --text: #e2e8f0;
+  --muted: #64748b;
+
+  /* Self-hosted Orbitron / JetBrains Mono go in public/fonts/; system fallbacks until then. */
+  --font-display: 'Orbitron', 'Segoe UI', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;
+}
