@@ -258,6 +258,8 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
 - [ ] **Fase 5 — Firebase:** Auth anônimo, envio de score, ranking, regras.
 - [ ] **Fase 5.5 — Contas e economia online:** vínculo Google, sync de perfil, regras de moedas/compra, missões, streak.
 - [ ] **Fase 6 — Deploy:** GitHub Actions + Pages, App Check.
+  - [x] Workflow `.github/workflows/deploy.yml` (antecipado com autorização em 2026-11-21): no push para `main` roda `npm ci`, testes e build (Node 26) e publica `dist/` com `actions/deploy-pages`. Requer Settings → Pages → Source = "GitHub Actions".
+  - [ ] Falta: secrets `VITE_FIREBASE_*` no passo de build e App Check (dependem da Fase 5).
 - [ ] **Fase 7 — Extras:** Desafio Diário, boss, conquistas, coleções, suporte mobile.
 
 ---
