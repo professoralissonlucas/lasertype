@@ -26,7 +26,7 @@ export function itemAction(itemId: string, inventory: Inventory, shop: DailyShop
 export function itemSwatch(item: CosmeticItem): readonly [string, string] {
   switch (item.type) {
     case 'cannon':
-      return [item.params.barrelColor, item.params.baseStroke];
+      return [item.params.hull[2], item.params.trim];
     case 'theme':
       return item.params.nebula;
     case 'laserColor':

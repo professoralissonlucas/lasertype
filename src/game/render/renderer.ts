@@ -10,7 +10,7 @@ import type { MatchState } from '../state.ts';
 import { isEmpReady } from '../combo.ts';
 import type { BackgroundState } from './background.ts';
 import { drawBackground } from './drawBackground.ts';
-import { drawCannon } from './drawCannon.ts';
+import { drawCannon, type CannonPose } from './drawCannon.ts';
 import { drawBeams, drawParticles } from './drawFx.ts';
 import { drawWord, type WordMetrics } from './drawWord.ts';
 import { computeLayout, LAYOUT, toScreenY, wordStartX, type Layout } from './layout.ts';
@@ -32,9 +32,8 @@ export interface RenderFrame {
   readonly alpha: number;
   /** Interpolation for effects and background (always live). */
   readonly fxAlpha: number;
-  readonly cannonAngle: number;
-  /** 0..1 barrel recoil. */
-  readonly recoil: number;
+  /** Aim, recoil, muzzle effects, energy core (one object reused every frame). */
+  readonly cannon: CannonPose;
   readonly lasers: LaserPool;
   readonly effects: Effects;
   readonly background: BackgroundState;
@@ -129,7 +128,7 @@ export class Renderer {
     if (state) this.drawWords(state, frame);
     drawParticles(ctx, effects.particles, frame.fxAlpha, skin, this.wordFont);
     drawBeams(ctx, frame.lasers, skin, this.dpr);
-    drawCannon(ctx, skin, layout.cannonX, layout.cannonY, frame.cannonAngle, frame.recoil, frame.missFlash, frame.time);
+    drawCannon(ctx, skin, layout.cannonX, layout.cannonY, frame.cannon);
     if (state) this.drawEmpGauge(state.combo.charge, frame.time);
     ctx.restore();
 

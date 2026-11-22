@@ -7,7 +7,7 @@ import { Cannon } from '../game/entities/Cannon.ts';
 import { LaserPool } from '../game/entities/Laser.ts';
 import { BackgroundState } from '../game/render/background.ts';
 import { drawBackground } from '../game/render/drawBackground.ts';
-import { drawCannon, muzzleSideOffset } from '../game/render/drawCannon.ts';
+import { barrelOf, createCannonPose, drawCannon, muzzleSideOffset } from '../game/render/drawCannon.ts';
 import { drawBeams, drawParticles } from '../game/render/drawFx.ts';
 import { drawWord, type WordMetrics, type WordVisual } from '../game/render/drawWord.ts';
 import { LAYOUT } from '../game/render/layout.ts';
@@ -44,6 +44,7 @@ export class ShopPreview {
   private readonly background = new BackgroundState(createRng('preview-stars'));
   private readonly lasers = new LaserPool(8);
   private readonly cannon = new Cannon();
+  private readonly pose = createCannonPose();
   private readonly script = new PreviewScript();
   private readonly cues: PreviewCue[] = [];
   private readonly nebulaMatrix = new DOMMatrix();
@@ -60,7 +61,6 @@ export class ShopPreview {
   private lastTime: number | null = null;
   private time = 0;
   private aimHold = 0;
-  private shots = 0;
   /** Virtual size and the scale/DPR that maps it to the backing store. */
   private width = 1;
   private height = VIRTUAL_HEIGHT;
@@ -194,10 +194,11 @@ export class ShopPreview {
         const y = this.targetY();
         const angle = aimAngle(this.cannonX, this.cannonY, x, y);
         this.cannon.snapTo(angle);
-        this.cannon.kick();
+        const shot = this.cannon.shots;
+        this.cannon.kick(barrelOf(this.skin.cosmetics.cannon, shot));
         this.aimHold = LASER_LIFETIME;
         const a = this.cannon.angle;
-        const side = muzzleSideOffset(this.skin.cosmetics.cannon, this.shots++);
+        const side = muzzleSideOffset(this.skin.cosmetics.cannon, shot);
         const mx = this.cannonX + Math.sin(a) * LAYOUT.barrelLength + Math.cos(a) * side;
         const my = this.cannonY - Math.cos(a) * LAYOUT.barrelLength + Math.sin(a) * side;
         this.lasers.fire(mx, my, x, y, LASER_LIFETIME);
@@ -254,15 +255,12 @@ export class ShopPreview {
 
     drawParticles(ctx, this.effects.particles, alpha, skin, this.font);
     drawBeams(ctx, this.lasers, skin, k);
-    drawCannon(
-      ctx,
-      skin,
-      this.cannonX,
-      this.cannonY,
-      this.cannon.interpolated(alpha),
-      this.cannon.interpolatedRecoil(alpha),
-      false,
-      this.time,
-    );
+    const pose = this.pose;
+    this.cannon.writeMotion(alpha, pose);
+    // The core charges up as the word is shot, so the preview shows it working.
+    pose.energy = word ? 0.3 + (0.6 * this.script.typed) / word.length : 0.3;
+    pose.time = this.time;
+    pose.reduced = this.reduced;
+    drawCannon(ctx, skin, this.cannonX, this.cannonY, pose);
   }
 }

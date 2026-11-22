@@ -18,16 +18,32 @@ export type Hex = string;
 // ---------- Parameters per category ----------
 
 /** The size of the cannon never changes (the muzzle stays where the gameplay expects it). */
+/**
+ * The cannon is drawn in layers (render/drawCannon.ts): platform, energy ring, barrel,
+ * turret head, energy core. The energy ring and core always take the laser color.
+ */
 export interface CannonParams {
-  /** dome = half disc · prism = faceted half hexagon · ring = open ring with orbiting nodes */
-  readonly base: 'dome' | 'prism' | 'ring';
-  /** single = one barrel · twin = two barrels firing in turns · tapered = narrowing tip · rail = two rails with a core */
-  readonly barrel: 'single' | 'twin' | 'tapered' | 'rail';
-  readonly baseFill: Hex;
-  readonly baseFillAlpha: number;
-  readonly baseStroke: Hex;
-  readonly barrelColor: Hex;
-  readonly hubColor: Hex;
+  /**
+   * Platform + turret head. armored = steel bunker with a ball turret · heavy = wide mount
+   * with power cells and a boxy head · crystal = translucent faceted prism and gem head ·
+   * orbital = sleek hover plinth with an orbital ring of nodes around the turret.
+   */
+  readonly body: 'armored' | 'heavy' | 'crystal' | 'orbital';
+  /**
+   * single = tube with cooling fins, band and muzzle tip · twin = two tubes firing in turns ·
+   * prism = faceted tapering crystal · rail = two rails with coils around an energy line.
+   */
+  readonly barrel: 'single' | 'twin' | 'prism' | 'rail';
+  /** Hull shades, dark → mid → light (plates, head and barrel gradients). */
+  readonly hull: readonly [Hex, Hex, Hex];
+  /** Thin outline. */
+  readonly edge: Hex;
+  /** Lit edges, rivets and reflections. */
+  readonly highlight: Hex;
+  /** Trim: barrel bands, coils, power cells, visor. */
+  readonly trim: Hex;
+  /** Body opacity: 1 = solid metal; below 1 the core shows through (crystal). */
+  readonly opacity: number;
 }
 
 export interface GridParams {

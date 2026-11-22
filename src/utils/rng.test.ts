@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRng, hashString, pickWeighted, shuffled } from './rng.ts';
+import { createRng, hashString, hashUnit, pickWeighted, shuffled } from './rng.ts';
 
 describe('createRng', () => {
   it('is deterministic for the same seed', () => {
@@ -99,5 +99,30 @@ describe('shuffled', () => {
   it('handles empty and single-item lists', () => {
     expect(shuffled(createRng(1), [])).toEqual([]);
     expect(shuffled(createRng(1), ['x'])).toEqual(['x']);
+  });
+});
+
+describe('hashUnit', () => {
+  it('is repeatable, in [0, 1), and changes with either input', () => {
+    expect(hashUnit(7, 3)).toBe(hashUnit(7, 3));
+    const values = new Set<number>();
+    for (let seed = 0; seed < 50; seed++) {
+      for (let salt = 0; salt < 10; salt++) {
+        const value = hashUnit(seed, salt);
+        expect(value).toBeGreaterThanOrEqual(0);
+        expect(value).toBeLessThan(1);
+        values.add(value);
+      }
+    }
+    expect(values.size).toBe(500);
+  });
+
+  it('spreads evenly enough for visual effects', () => {
+    const buckets = [0, 0, 0, 0];
+    for (let i = 0; i < 4000; i++) {
+    const k = Math.floor(hashUnit(i, 1) * 4);
+    buckets[k] = (buckets[k] ?? 0) + 1;
+  }
+    for (const count of buckets) expect(count).toBeGreaterThan(850);
   });
 });

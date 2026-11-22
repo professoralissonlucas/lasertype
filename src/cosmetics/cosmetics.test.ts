@@ -74,10 +74,10 @@ describe('resolveCosmetics', () => {
     expect(resolveCosmetics({}, everything)).toEqual(DEFAULT_COSMETICS);
   });
 
-  it('defaults reproduce the original look', () => {
+  it('defaults reproduce the original look (the cannon: the sober Sentinel)', () => {
     expect(DEFAULT_COSMETICS.laserColor).toEqual({ core: PALETTE.text, glow: PALETTE.primary, width: 1 });
     expect(DEFAULT_COSMETICS.theme.nebula).toEqual([PALETTE.primary, PALETTE.danger]);
-    expect(DEFAULT_COSMETICS.cannon).toMatchObject({ base: 'dome', barrel: 'single', barrelColor: PALETTE.primary });
+    expect(DEFAULT_COSMETICS.cannon).toMatchObject({ body: 'armored', barrel: 'single', opacity: 1 });
     expect(DEFAULT_COSMETICS.wordBorder).toMatchObject({ shape: 'rounded', color: PALETTE.muted, alpha: 0.35 });
     expect(DEFAULT_COSMETICS.explosion).toMatchObject({ letters: 'scatter', debrisCount: 1, rings: 1, inward: false });
   });
@@ -104,5 +104,23 @@ describe('withItem', () => {
         expect(result[type]).toBe(type === item.type ? item.params : DEFAULT_COSMETICS[type]);
       }
     }
+  });
+});
+
+describe('cannons', () => {
+  const cannons = itemsOfType('cannon');
+
+  it('each has its own body; only the twin has two barrels', () => {
+    expect(new Set(cannons.map((item) => item.params.body)).size).toBe(cannons.length);
+    for (const item of cannons) {
+      const { params } = item;
+      expect(params.opacity, item.id).toBeGreaterThan(0);
+      expect(params.opacity, item.id).toBeLessThanOrEqual(1);
+      expect(params.barrel === 'twin', item.id).toBe(item.id === 'cannon_twin');
+    }
+  });
+
+  it('the crystal is translucent, the others solid metal', () => {
+    for (const item of cannons) expect(item.params.opacity < 1, item.id).toBe(item.params.body === 'crystal');
   });
 });

@@ -35,6 +35,28 @@ export function glowSprite(color: string): HTMLCanvasElement {
   return canvas;
 }
 
+const puffCache = new Map<string, HTMLCanvasElement>();
+
+/** Soft, wide blob for smoke (normal blending: it darkens/greys what is behind it). */
+export function puffSprite(color: string): HTMLCanvasElement {
+  const cached = puffCache.get(color);
+  if (cached) return cached;
+  const canvas = createCanvas(GLOW_SIZE, GLOW_SIZE);
+  const ctx = canvas.getContext('2d');
+  if (ctx) {
+    const c = GLOW_SIZE / 2;
+    const gradient = ctx.createRadialGradient(c, c, 0, c, c, c);
+    gradient.addColorStop(0, withAlpha(color, 0.6));
+    gradient.addColorStop(0.35, withAlpha(color, 0.38));
+    gradient.addColorStop(0.7, withAlpha(color, 0.1));
+    gradient.addColorStop(1, withAlpha(color, 0));
+    ctx.fillStyle = gradient;
+    ctx.fillRect(0, 0, GLOW_SIZE, GLOW_SIZE);
+  }
+  puffCache.set(color, canvas);
+  return canvas;
+}
+
 /** Vertical soft band (transparent → color → transparent), stretched under the perimeter. */
 export function bandSprite(color: string): HTMLCanvasElement {
   const canvas = createCanvas(1, 64);

@@ -20,14 +20,15 @@ export const CATALOG: readonly CosmeticItem[] = [
     name: { 'pt-BR': 'Sentinela', en: 'Sentinel' },
     rarity: 'common',
     price: 0,
+    // Military and sober: blue-grey steel.
     params: {
-      base: 'dome',
+      body: 'armored',
       barrel: 'single',
-      baseFill: PALETTE.muted,
-      baseFillAlpha: 0.35,
-      baseStroke: PALETTE.muted,
-      barrelColor: PALETTE.primary,
-      hubColor: PALETTE.text,
+      hull: ['#1A2330', '#3B4A5D', '#71839A'],
+      edge: '#080C13',
+      highlight: '#B4C2D3',
+      trim: '#8A9BB0',
+      opacity: 1,
     },
   },
   {
@@ -36,14 +37,15 @@ export const CATALOG: readonly CosmeticItem[] = [
     name: { 'pt-BR': 'Gêmeo', en: 'Twin' },
     rarity: 'rare',
     price: price('rare'),
+    // Heavy industrial mount, two barrels firing in turns.
     params: {
-      base: 'dome',
+      body: 'heavy',
       barrel: 'twin',
-      baseFill: '#475569',
-      baseFillAlpha: 0.45,
-      baseStroke: '#94A3B8',
-      barrelColor: '#67E8F9',
-      hubColor: '#E2E8F0',
+      hull: ['#1C2533', '#4A5668', '#98A6B9'],
+      edge: '#0A0F18',
+      highlight: '#D5DDE8',
+      trim: '#67E8F9',
+      opacity: 1,
     },
   },
   {
@@ -52,14 +54,15 @@ export const CATALOG: readonly CosmeticItem[] = [
     name: { 'pt-BR': 'Cristal', en: 'Crystal' },
     rarity: 'epic',
     price: price('epic'),
+    // Translucent prisms with reflections; the core glows through the gem.
     params: {
-      base: 'prism',
-      barrel: 'tapered',
-      baseFill: '#8B5CF6',
-      baseFillAlpha: 0.28,
-      baseStroke: '#C4B5FD',
-      barrelColor: '#DDD6FE',
-      hubColor: '#F5F3FF',
+      body: 'crystal',
+      barrel: 'prism',
+      hull: ['#3B1A7A', '#7C4DE8', '#D4C6FF'],
+      edge: '#E4DCFF',
+      highlight: '#FFFFFF',
+      trim: '#B79CFF',
+      opacity: 0.62,
     },
   },
   {
@@ -68,14 +71,15 @@ export const CATALOG: readonly CosmeticItem[] = [
     name: { 'pt-BR': 'Halo', en: 'Halo' },
     rarity: 'legendary',
     price: price('legendary'),
+    // Sleek white turret inside an orbital ring of nodes.
     params: {
-      base: 'ring',
+      body: 'orbital',
       barrel: 'rail',
-      baseFill: '#22D3EE',
-      baseFillAlpha: 0.12,
-      baseStroke: '#E2E8F0',
-      barrelColor: '#F8FAFC',
-      hubColor: '#22D3EE',
+      hull: ['#4E5D73', '#B5C2D3', '#EEF2F7'],
+      edge: '#2B3646',
+      highlight: '#FFFFFF',
+      trim: '#22D3EE',
+      opacity: 1,
     },
   },
 
@@ -324,8 +328,8 @@ export function getItem(id: string): CosmeticItem | undefined {
 }
 
 /** Items of one category, default first (catalog order). */
-export function itemsOfType(type: CosmeticType): CosmeticItem[] {
-  return CATALOG.filter((item) => item.type === type);
+export function itemsOfType<T extends CosmeticType>(type: T): Extract<CosmeticItem, { type: T }>[] {
+  return CATALOG.filter((item): item is Extract<CosmeticItem, { type: T }> => item.type === type);
 }
 
 /** Free items everyone owns from the start (price 0). */

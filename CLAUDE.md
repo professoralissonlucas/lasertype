@@ -46,6 +46,7 @@ npm run test       # vitest
 npm run typecheck  # tsc --noEmit (app) + tsc --noEmit -p scripts (scripts Node)
 npm run seed:shop  # grava shop/{id} e shop/_config no Firestore (ver §9 "Loja no Firestore"); -- --dry-run só mostra
 npm run share:images  # regera public/og-image.jpg e public/apple-touch-icon.png (ver §10 "Página e compartilhamento")
+npm run share:images -- --cannons [pasta]  # pranchas dos 4 canhões (1×, 2×, zoom, sequência do tiro, energia) para revisar a arte
 ```
 
 Antes de dar uma tarefa como concluída: `npm run typecheck && npm run test && npm run build` devem passar.
@@ -70,6 +71,8 @@ src/
     effects/              # partículas, screen shake, flash
     render/               # renderer.ts + funções de desenho parametrizadas por cosmético
                           # (drawCannon, drawWord, drawFx, drawBackground) e Skin (cosméticos → sprites/cores)
+      cannon/             # camadas do canhão: model (pose e regras puras), kit (peças comuns),
+                          # platforms, barrels, heads, muzzle; drawCannon.ts monta tudo (§7 "Canhão")
   modes/                  # survival, timeAttack, zen, daily
   words/                  # listas pt-BR.json, en.json (por dificuldade)
   cosmetics/
@@ -108,7 +111,7 @@ public/
 scripts/
   seed-shop.ts            # firebase-admin: grava shop/{id} e shop/_config a partir do catalog.ts
   share-images.ts         # serve share/ com o Vite, abre no Edge/Chrome headless e salva as imagens
-  share/                  # cena da imagem de prévia, desenhada com o renderer do jogo
+  share/                  # cena da imagem de prévia e pranchas dos canhões, desenhadas com o renderer do jogo
   site.ts                 # URLs absolutas das tags de compartilhamento (usado pelo vite.config.ts)
   tsconfig.json           # tipos do Node para os scripts, vite.config.ts e share/ (o app não vê os globais do Node)
 index.html                # metadados, Open Graph, <noscript> e guarda de inicialização (ES5)
@@ -196,7 +199,15 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
   - `shadowBlur` só em poucos elementos (laser, palavra travada, perímetro após dano) e multiplicado pelo DPR (o blur ignora a transformação). Partículas usam sprites de brilho pré-renderizados com `'lighter'`.
   - Aleatoriedade visual também via `utils/rng.ts` (seeds fixas por sistema: `fx`, `sfx`, starfield, nebulosa).
 - Acessibilidade: opção "Reduzir efeitos", modo daltônico, volume separado música/efeitos.
-  - "Reduzir efeitos" (tela de Configurações): sem screen shake, sem flash de tela, fundo parado (também nos menus) e metade das partículas. O pulso do perímetro continua (é o aviso de dano que substitui o flash). Na primeira visita, começa ligado se o sistema pede `prefers-reduced-motion`.
+  - "Reduzir efeitos" (tela de Configurações): sem screen shake, sem flash de tela, fundo parado (também nos menus) e metade das partículas. O pulso do perímetro continua (é o aviso de dano que substitui o flash). No canhão: sem respiração, pulso do anel, órbita e reflexos animados, sem faíscas nem fumaça; o recuo e o brilho da boca continuam (são o retorno do tiro). Na primeira visita, começa ligado se o sistema pede `prefers-reduced-motion`.
+
+### Canhão (`render/drawCannon.ts` + `render/cannon/`)
+- Desenhado em camadas, em Canvas 2D vetorial: plataforma → anel de energia → cano(s) → torre → núcleo de energia → efeitos da boca. Coordenadas locais ao pivô; a luz vem sempre de cima à esquerda (as partes que giram montam o caminho girado e preenchem com gradiente do mundo). Gradientes em cache por `Skin`; brilhos são sprites com `'lighter'`, sem `shadowBlur`. Custo medido: ~0,06–0,09 ms por quadro.
+- **Mesmo tamanho para todos:** 60 px de largura (±`LAYOUT.baseRadius`) e a boca do cano a `LAYOUT.barrelLength` (52 px) do pivô, onde o laser nasce (o Gêmeo com os dois canos a ±4,5 px). A base desce até 16 px abaixo do pivô. `drawCannon.test.ts` desenha num contexto falso e confere a área, a boca, o recuo e que o contexto volta como estava.
+- Parâmetros (`CannonParams`): `body` (`armored` | `heavy` | `crystal` | `orbital`), `barrel` (`single` | `twin` | `prism` | `rail`), `hull` (3 tons, escuro → claro), `edge`, `highlight`, `trim`, `opacity` (< 1 = translúcido). O anel e o núcleo usam sempre a cor do laser equipado; num erro de digitação ficam em `--danger`.
+- Identidades: **Sentinela** (padrão) bunker de aço cinza-azulado com torre esférica, rebites, respiros e cano com aletas, cinta e freio de boca; **Gêmeo** base pesada com células de energia (as barras acendem com a energia), cabeça quadrada e dois canos que alternam os tiros (cada um recua sozinho); **Cristal** prismas translúcidos com facetas, reflexos e lascas, o núcleo aparece através da gema; **Halo** torre branca com visor, trilhos com bobinas e linha de energia, e um anel orbital inclinado com 3 nós girando (metade de trás atrás da torre).
+- Movimento (`entities/Cannon.ts`): giro por mola criticamente amortecida (acelera e assenta sem passar do alvo); no tiro, a mira encaixa no alvo (feixe e cano alinhados), o cano recua e volta com suavização (`recoilKick`), a boca brilha ~0,12 s, com clarão, faíscas e fumaça curta (aleatoriedade por `hashUnit` com o número do tiro: repetível, sem alocar). Parado, as luzes "respiram".
+- **Núcleo de energia:** `coreEnergy(multiplicador, carga do EMP)` vai de 0,2 (brasa) a 0,95; EMP pronto = 1, com ondas saindo do núcleo. Menus: 0,3. A prévia da loja carrega o núcleo conforme a palavra é atirada.
   - Modo daltônico e volume de música ficam para quando houver música/cosméticos de cor.
 
 ### Configurações (`src/settings/`)
@@ -252,7 +263,7 @@ interface CosmeticItem<T extends CosmeticType> {
 ```
 - Renderers recebem `params`; adicionar item novo = só adicionar dados (e incluir em `DISCOUNT_ORDER` se for vendável).
 - Preço dos vendáveis = tabela de raridade (`CONFIG.economy.rarityPrice`).
-- Cosméticos mudam só a aparência e mantêm as pistas de jogo: o tema muda só o fundo do canvas (não o HUD); a borda muda a forma e a cor das palavras normais, mas travada/especiais mantêm suas cores; o canhão tem sempre o mesmo tamanho (a boca do cano não muda); dano/perímetro continuam em `--danger`.
+- Cosméticos mudam só a aparência e mantêm as pistas de jogo: o tema muda só o fundo do canvas (não o HUD); a borda muda a forma e a cor das palavras normais, mas travada/especiais mantêm suas cores; o canhão tem sempre o mesmo tamanho (a boca do cano não muda) e o brilho do núcleo é igual em todos (mostra combo/EMP, não dá vantagem); dano/perímetro continuam em `--danger`.
 - Itens de conquista não são compráveis (ex: Canhão Dourado ao atingir 100 WPM).
 
 ### Loja rotativa (`economy/shop.ts`)
@@ -443,6 +454,7 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Acabamento (§10 "Página e compartilhamento"): título, descrição, `theme-color`, favicon SVG do canhão, `apple-touch-icon`, Open Graph com imagem gerada pelo renderer do jogo, aviso de navegador sem suporte / sem JavaScript / falha ao iniciar. Os avisos foram conferidos no Edge headless (desktop e 360 px).
   - Desempenho do build (2026-11-22, gzip): carga inicial ≈ 56 KB (JS 48,2 + CSS 4,9 + HTML 2,5 + `boot.css`). Firebase fora do bundle inicial, em chunks dinâmicos pedidos logo após a inicialização, sem bloquear a primeira tela: núcleo 11,4, Auth 36,6, Firestore lite 39,0, App Check 5,5 (≈ 92 KB). O script do reCAPTCHA vem do Google, também em segundo plano. Nenhum `modulepreload` do Firebase no HTML; a ativação do debug token não entra no build de produção.
   - Pendências no console: registrar o app no App Check com a chave secreta do reCAPTCHA, registrar o debug token de desenvolvimento, criar o secret `VITE_RECAPTCHA_SITE_KEY` no GitHub e, depois de conferir as métricas, aplicar a imposição no Firestore e no Authentication.
+- [x] **Arte dos canhões (fora das fases, 2026-11-22):** os 4 canhões redesenhados em camadas (§7 "Canhão"), com o mesmo tamanho e a mesma boca; giro por mola, recuo por cano, clarão/faíscas/fumaça na boca, núcleo ligado ao combo e ao EMP. Revisado com as pranchas de `npm run share:images -- --cannons` e no jogo real (Edge headless). A imagem de compartilhamento foi regerada com o canhão novo. Custo: JS inicial 48,2 → 53,3 KB gzip.
 - [ ] **Fase 7 — Extras:** Desafio Diário, boss, conquistas, coleções, suporte mobile.
 
 ---

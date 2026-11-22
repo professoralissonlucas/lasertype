@@ -7,7 +7,7 @@ import { Effects } from '../../src/game/effects/Effects.ts';
 import { LaserPool } from '../../src/game/entities/Laser.ts';
 import { BackgroundState } from '../../src/game/render/background.ts';
 import { drawBackground } from '../../src/game/render/drawBackground.ts';
-import { drawCannon } from '../../src/game/render/drawCannon.ts';
+import { createCannonPose, drawCannon } from '../../src/game/render/drawCannon.ts';
 import { drawBeams, drawParticles } from '../../src/game/render/drawFx.ts';
 import { drawWord, type WordMetrics, type WordVisual } from '../../src/game/render/drawWord.ts';
 import { LAYOUT } from '../../src/game/render/layout.ts';
@@ -33,7 +33,7 @@ const VH = OG_HEIGHT / SCALE;
 const FONT_SIZE = 20;
 const PERIMETER_Y = VH - 80;
 const CANNON_X = VW / 2;
-const CANNON_Y = VH - 18;
+const CANNON_Y = VH - 24;
 const STEP = 1 / 60;
 
 interface SceneWord extends WordVisual {
@@ -168,7 +168,15 @@ function drawOgImage(canvas: HTMLCanvasElement): void {
   }
   drawParticles(ctx, fx.particles, 1, skin, font);
   drawBeams(ctx, lasers, skin, SCALE);
-  drawCannon(ctx, skin, CANNON_X, CANNON_Y, angle, 0.5, false, 0);
+  // Just fired: barrel kicked back, muzzle hot and sparking, core charged by a combo.
+  const pose = createCannonPose();
+  pose.angle = angle;
+  pose.recoil[0] = 0.75;
+  pose.shotAge[0] = 0.03;
+  pose.shotSeed[0] = 3;
+  pose.energy = 0.75;
+  pose.time = 1.2;
+  drawCannon(ctx, skin, CANNON_X, CANNON_Y, pose);
 
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   drawTitle(ctx);

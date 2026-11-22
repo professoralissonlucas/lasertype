@@ -14,8 +14,6 @@ export class Skin {
   readonly nebula: HTMLCanvasElement;
   /** Stroke of normal (unlocked, not special) word plates. */
   readonly plateStroke: string;
-  /** Cannon base fill (with its alpha). */
-  readonly cannonFill: string;
   /** Theme grid stroke, or null without a grid. */
   readonly gridStroke: string | null;
 
@@ -28,8 +26,6 @@ export class Skin {
     this.nebula = nebulaTexture(cosmetics.theme);
     const border = cosmetics.wordBorder;
     this.plateStroke = withAlpha(border.color, border.alpha);
-    const cannon = cosmetics.cannon;
-    this.cannonFill = withAlpha(cannon.baseFill, cannon.baseFillAlpha);
     const grid = cosmetics.theme.grid;
     this.gridStroke = grid ? withAlpha(grid.color, grid.alpha) : null;
   }

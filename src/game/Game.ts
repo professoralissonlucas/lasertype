@@ -16,7 +16,7 @@ import { Cannon } from './entities/Cannon.ts';
 import { LaserPool } from './entities/Laser.ts';
 import { KeyboardInput, type InputAction } from './input.ts';
 import { BackgroundState } from './render/background.ts';
-import { muzzleSideOffset } from './render/drawCannon.ts';
+import { barrelOf, coreEnergy, createCannonPose, IDLE_ENERGY, muzzleSideOffset } from './render/drawCannon.ts';
 import {
   letterCenterX,
   muzzlePosition,
@@ -26,6 +26,7 @@ import {
   type Layout,
 } from './render/layout.ts';
 import { Renderer } from './render/renderer.ts';
+import { comboMultiplier } from './scoring.ts';
 import { Spawner } from './spawner.ts';
 import {
   activateEmp,
@@ -98,8 +99,8 @@ export class Game {
   private effects = new Effects(false);
   private cosmetics: ResolvedCosmetics = DEFAULT_COSMETICS;
   private match: ActiveMatch | null = null;
-  /** Shots fired (twin barrels alternate sides). */
-  private shots = 0;
+  /** What the renderer draws of the cannon (reused every frame). */
+  private readonly cannonPose = createCannonPose();
   /** Background drift outside matches (menus follow the "Reduzir efeitos" setting too). */
   private idleReducedEffects = false;
   private missFlash = 0;
@@ -414,11 +415,12 @@ export class Game {
     const tx = letterCenterX(layout, hit.x, hit.length, hit.index, charWidth);
     const ty = toScreenY(layout, hit.y);
     this.cannon.snapTo(aimAngle(layout.cannonX, layout.cannonY, tx, ty));
-    this.cannon.kick();
     this.aimHold = LASER_LIFETIME;
     const muzzle = muzzlePosition(layout, this.cannon.angle);
     // Sideways offset (twin barrels): perpendicular to the barrel direction.
-    const side = muzzleSideOffset(this.cosmetics.cannon, this.shots++);
+    const shot = this.cannon.shots;
+    this.cannon.kick(barrelOf(this.cosmetics.cannon, shot));
+    const side = muzzleSideOffset(this.cosmetics.cannon, shot);
     const mx = muzzle.x + Math.cos(this.cannon.angle) * side;
     const my = muzzle.y + Math.sin(this.cannon.angle) * side;
     this.lasers.fire(mx, my, tx, ty, LASER_LIFETIME);
@@ -433,12 +435,17 @@ export class Game {
     // words freeze when the match is not running; everything freezes while paused.
     const wordAlpha = status === 'playing' ? alpha : 1;
     const fxAlpha = status === 'paused' ? 1 : alpha;
+    const pose = this.cannonPose;
+    this.cannon.writeMotion(fxAlpha, pose);
+    pose.energy = state ? coreEnergy(comboMultiplier(state.combo.combo), state.combo.charge) : IDLE_ENERGY;
+    pose.missFlash = this.missFlash > 0;
+    pose.time = this.animTime;
+    pose.reduced = this.match ? this.match.config.reduceEffects : this.idleReducedEffects;
     this.renderer.draw({
       state,
       alpha: wordAlpha,
       fxAlpha,
-      cannonAngle: this.cannon.interpolated(fxAlpha),
-      recoil: this.cannon.interpolatedRecoil(fxAlpha),
+      cannon: pose,
       lasers: this.lasers,
       effects: this.effects,
       background: this.background,

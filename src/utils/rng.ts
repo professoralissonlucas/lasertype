@@ -22,6 +22,18 @@ export function hashString(input: string): number {
   return hash >>> 0;
 }
 
+/**
+ * Stateless hash of two integers to a float in [0, 1): random-looking, the same every
+ * time. For visual effects redrawn each frame from an index (e.g. the sparks of shot n),
+ * where keeping an Rng per effect would mean allocating.
+ */
+export function hashUnit(seed: number, salt: number): number {
+  let t = (Math.imul(seed | 0, 0x9e3779b1) ^ Math.imul((salt | 0) + 0x632be5ab, 0x85ebca6b)) >>> 0;
+  t = Math.imul(t ^ (t >>> 16), 0x7feb352d);
+  t = Math.imul(t ^ (t >>> 15), 0x846ca68b);
+  return ((t ^ (t >>> 16)) >>> 0) / 4294967296;
+}
+
 export function createRng(seed: number | string): Rng {
   let state = (typeof seed === 'string' ? hashString(seed) : Math.trunc(seed)) >>> 0;
 

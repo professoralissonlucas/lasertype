@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { Cannon } from './Cannon.ts';
+import { Cannon, SETTLED_SHOT_AGE, type CannonMotion } from './Cannon.ts';
 import { LaserPool } from './Laser.ts';
 
 describe('Cannon', () => {
@@ -27,24 +27,79 @@ describe('Cannon', () => {
     expect(cannon.interpolated(0.5)).toBeCloseTo(0.2);
   });
 
-  it('kicks back when firing and returns to rest quickly', () => {
+  it('turns like a damped spring: speeds up, then settles without overshooting', () => {
+    const cannon = new Cannon();
+    const steps: number[] = [];
+    let previous = 0;
+    for (let i = 0; i < 40; i++) {
+      cannon.beginStep();
+      cannon.turnTowards(1, 1 / 60);
+      steps.push(cannon.angle - previous);
+      previous = cannon.angle;
+      expect(cannon.angle).toBeLessThanOrEqual(1 + 1e-6);
+    }
+    // Ease in (the first step is not the biggest), ease out (the last steps are tiny).
+    expect(Math.max(...steps)).toBeGreaterThan(steps[0] ?? 0);
+    expect(steps.at(-1) ?? 1).toBeLessThan(0.002);
+  });
+
+  it('a snap stops the turn (the next turn starts from rest)', () => {
+    const cannon = new Cannon();
+    for (let i = 0; i < 5; i++) cannon.turnTowards(1, 1 / 60);
+    cannon.snapTo(0.2);
+    cannon.turnTowards(0.2, 1 / 60);
+    expect(cannon.angle).toBeCloseTo(0.2, 6);
+  });
+
+  it('kicks back the barrel that fired and returns it to rest quickly', () => {
     const cannon = new Cannon();
     cannon.beginStep();
     cannon.kick();
-    expect(cannon.recoil).toBe(1);
+    expect(cannon.recoil).toEqual([1, 0]);
     expect(cannon.interpolatedRecoil(0.5)).toBeCloseTo(0.5);
-    for (let i = 0; i < 12; i++) {
+    for (let i = 0; i < 9; i++) {
       cannon.beginStep();
       cannon.recover(1 / 60);
     }
-    expect(cannon.recoil).toBe(0);
+    expect(cannon.recoil[0]).toBe(0);
+    cannon.kick(1);
+    expect(cannon.recoil).toEqual([0, 1]);
   });
 
-  it('reset() clears recoil', () => {
+  it('counts shots and ages each barrel’s muzzle effects, capped once they are over', () => {
+    const cannon = new Cannon();
+    cannon.kick(0);
+    cannon.kick(1);
+    expect(cannon.shots).toBe(2);
+    expect(cannon.shotAge).toEqual([0, 0]);
+    cannon.beginStep();
+    cannon.recover(0.25);
+    expect(cannon.shotAge).toEqual([0.25, 0.25]);
+    for (let i = 0; i < 10; i++) cannon.recover(0.25);
+    expect(cannon.shotAge).toEqual([SETTLED_SHOT_AGE, SETTLED_SHOT_AGE]);
+  });
+
+  it('writes the interpolated motion for the renderer', () => {
+    const cannon = new Cannon();
+    cannon.kick(0);
+    cannon.kick(1);
+    cannon.beginStep();
+    cannon.snapTo(0.4);
+    cannon.recover(0.1);
+    const motion: CannonMotion = { angle: 0, recoil: [0, 0], shotAge: [0, 0], shotSeed: [0, 0] };
+    cannon.writeMotion(0.5, motion);
+    expect(motion.angle).toBeCloseTo(0.2);
+    expect(motion.shotAge[1]).toBeCloseTo(0.05);
+    expect(motion.shotSeed).toEqual([0, 1]);
+  });
+
+  it('reset() clears recoil, shots and the muzzle effects', () => {
     const cannon = new Cannon();
     cannon.kick();
     cannon.reset();
-    expect(cannon.recoil).toBe(0);
+    expect(cannon.recoil).toEqual([0, 0]);
+    expect(cannon.shots).toBe(0);
+    expect(cannon.shotAge).toEqual([SETTLED_SHOT_AGE, SETTLED_SHOT_AGE]);
   });
 });
 
