@@ -18,7 +18,7 @@ describe('buildReport', () => {
       s.elapsed = 60;
       s.wave = 3;
       s.combo = { combo: 4, maxCombo: 21, charge: 0.5 };
-      Object.assign(s.stats, { destroyed: 30, breaches: 2, hits: 300, misses: 15, empUses: 1 });
+      Object.assign(s.stats, { destroyed: 30, breaches: 2, hits: 300, misses: 15, empUses: 1, bosses: 2 });
     });
     expect(buildReport(state)).toMatchObject({
       mode: 'timeAttack',
@@ -34,6 +34,7 @@ describe('buildReport', () => {
       letters: 300,
       errors: 15,
       empUses: 1,
+      bosses: 2,
     });
     const report = buildReport(state);
     expect(report.accuracy).toBeCloseTo(300 / 315);

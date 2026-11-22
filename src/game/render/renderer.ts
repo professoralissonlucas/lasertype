@@ -3,13 +3,17 @@
 import { DEFAULT_COSMETICS } from '../../cosmetics/equip.ts';
 import type { ResolvedCosmetics } from '../../cosmetics/types.ts';
 import { lerp } from '../../utils/math.ts';
-import type { Effects } from '../effects/Effects.ts';
+import { CONFIG } from '../../config.ts';
+import type { Boss } from '../entities/Boss.ts';
+import type { BossWreck, Effects } from '../effects/Effects.ts';
 import type { ScreenFlash } from '../effects/flash.ts';
 import type { LaserPool } from '../entities/Laser.ts';
 import type { MatchState } from '../state.ts';
 import { isEmpReady } from '../combo.ts';
 import type { BackgroundState } from './background.ts';
+import { bossCenterX, bossTop, computeBossPlate, type BossPlate } from './bossLayout.ts';
 import { drawBackground } from './drawBackground.ts';
+import { drawBoss } from './drawBoss.ts';
 import { drawCannon, type CannonPose } from './drawCannon.ts';
 import { drawBeams, drawParticles } from './drawFx.ts';
 import { drawWord, type WordMetrics } from './drawWord.ts';
@@ -43,6 +47,11 @@ export interface RenderFrame {
   readonly time: number;
 }
 
+/** 0 → 1 while the boss arrives (the alert), 1 once it can be typed. */
+function bossEntrance(boss: Readonly<Boss>): number {
+  return 1 - boss.alert / CONFIG.boss.alertSeconds;
+}
+
 export class Renderer {
   private readonly canvas: HTMLCanvasElement;
   private readonly ctx: CanvasRenderingContext2D;
@@ -55,6 +64,8 @@ export class Renderer {
   /** Reused for every word drawn. */
   private readonly metrics: WordMetrics = { x: 0, y: 0, fontSize: 16, charWidth: 1, padX: LAYOUT.wordPadX, dpr: 1 };
   private wordFont = '';
+  /** Plate of the boss on screen (rebuilt when the boss or the layout changes). */
+  private plate: { readonly words: readonly string[]; readonly layout: Layout; readonly value: BossPlate } | null = null;
   private dpr = 1;
   private watchedDpr = 0;
   private dprQuery: MediaQueryList | null = null;
@@ -113,6 +124,20 @@ export class Renderer {
     if (dpr !== this.watchedDpr) this.watchDpr(dpr);
   };
 
+  /** Geometry of a boss on this screen. */
+  bossPlate(boss: Readonly<Boss>): BossPlate {
+    const { layout } = this;
+    if (this.plate?.words !== boss.words || this.plate.layout !== layout) {
+      this.plate = { words: boss.words, layout, value: computeBossPlate(layout, this.charWidth, boss.words) };
+    }
+    return this.plate.value;
+  }
+
+  /** Top of its plate right now (`alpha`: render interpolation, 1 = exactly now). */
+  bossTop(boss: Readonly<Boss>, alpha = 1): number {
+    return bossTop(this.layout, this.bossPlate(boss), lerp(boss.prevY, boss.y, alpha), bossEntrance(boss));
+  }
+
   draw(frame: RenderFrame): void {
     const { ctx, layout, skin } = this;
     const { effects } = frame;
@@ -126,6 +151,8 @@ export class Renderer {
     ctx.translate(effects.shake.offsetX(), effects.shake.offsetY());
     this.drawPerimeter(effects.perimeterPulse);
     if (state) this.drawWords(state, frame);
+    if (state?.boss) this.drawBoss(state.boss, frame);
+    else if (effects.wreck) this.drawWreck(effects.wreck, frame);
     drawParticles(ctx, effects.particles, frame.fxAlpha, skin, this.wordFont);
     drawBeams(ctx, frame.lasers, skin, this.dpr);
     drawCannon(ctx, skin, layout.cannonX, layout.cannonY, frame.cannon);
@@ -186,6 +213,33 @@ export class Renderer {
       metrics.y = toScreenY(layout, lerp(word.prevY, word.y, alpha));
       drawWord(ctx, skin, word, word.id === state.lockedId, metrics, frame.missFlash);
     }
+  }
+
+  private drawBoss(boss: Readonly<Boss>, frame: RenderFrame): void {
+    this.drawBossAt(boss, bossCenterX(this.layout), this.bossTop(boss, frame.alpha), bossEntrance(boss), 0, frame);
+  }
+
+  /** A defeated boss until it flies apart: every word a hole, trembling and heating up. */
+  private drawWreck({ boss, heat }: BossWreck, frame: RenderFrame): void {
+    const tremor = frame.cannon.reduced ? 0 : 3 * heat;
+    const x = bossCenterX(this.layout) + Math.sin(frame.time * 71) * tremor;
+    const top = this.bossTop(boss) + Math.sin(frame.time * 83 + 1) * tremor;
+    this.drawBossAt(boss, x, top, 1, heat, frame);
+  }
+
+  private drawBossAt(boss: Readonly<Boss>, x: number, top: number, entrance: number, heat: number, frame: RenderFrame): void {
+    const plate = this.bossPlate(boss);
+    drawBoss(this.ctx, this.skin, boss, plate, {
+      x,
+      top,
+      entrance,
+      heat,
+      missFlash: frame.missFlash,
+      time: frame.time,
+      reduced: frame.cannon.reduced,
+      dpr: this.dpr,
+      font: `${plate.fontSize}px ${WORD_FONT_FAMILY}`,
+    });
   }
 
   /** Icy tint over the battlefield while the ice slow lasts (fades in its last half second). */

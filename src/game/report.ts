@@ -26,6 +26,8 @@ export interface MatchReport {
   /** Wrong keys. */
   readonly errors: number;
   readonly empUses: number;
+  /** Bosses defeated. */
+  readonly bosses: number;
 }
 
 export function buildReport(state: Readonly<MatchState>): MatchReport {
@@ -51,5 +53,6 @@ export function buildReport(state: Readonly<MatchState>): MatchReport {
     letters: stats.hits,
     errors: stats.misses,
     empUses: stats.empUses,
+    bosses: stats.bosses,
   };
 }

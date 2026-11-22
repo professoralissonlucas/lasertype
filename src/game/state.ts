@@ -2,8 +2,11 @@
 import { CONFIG } from '../config.ts';
 import { MODES } from '../modes/index.ts';
 import type { ModeRules } from '../modes/types.ts';
+import { bossBonus, createBoss } from './boss.ts';
 import { INITIAL_COMBO, isEmpReady, updateCombo, type ComboState } from './combo.ts';
+import type { Boss } from './entities/Boss.ts';
 import { lettersOf, type Word } from './entities/Word.ts';
+import { charsMatch } from './input.ts';
 import { accuracyOf, areaKillPoints, comboMultiplier, wordPoints } from './scoring.ts';
 import { findNeighbors } from './specials.ts';
 import { resolveKey } from './targeting.ts';
@@ -12,6 +15,7 @@ import type {
   EndReason,
   GameDifficulty,
   GameEvent,
+  SpawnedBoss,
   SpawnedWord,
   TypingOptions,
   WordSource,
@@ -29,9 +33,11 @@ export interface MatchStats {
   hits: number;
   /** Wrong letters (including keys that matched no word). */
   misses: number;
-  /** Words that crossed the perimeter. */
+  /** Words (and bosses) that crossed the perimeter. */
   breaches: number;
   empUses: number;
+  /** Bosses defeated. */
+  bosses: number;
 }
 
 export interface MatchState {
@@ -45,6 +51,10 @@ export interface MatchState {
   elapsed: number;
   words: Word[];
   lockedId: number | null;
+  /** While it is here nothing else falls and every key goes to it. */
+  boss: Boss | null;
+  /** Seconds of calm left after a boss (the next wave waits). */
+  bossRest: number;
   shield: number;
   readonly maxShield: number;
   nextWordId: number;
@@ -75,6 +85,8 @@ export function createMatchState(options: MatchOptions = {}): MatchState {
     elapsed: 0,
     words: [],
     lockedId: null,
+    boss: null,
+    bossRest: 0,
     shield: maxShield,
     maxShield,
     nextWordId: 1,
@@ -83,7 +95,7 @@ export function createMatchState(options: MatchOptions = {}): MatchState {
     wave: 0,
     slowTimer: 0,
     endReason: null,
-    stats: { destroyed: 0, hits: 0, misses: 0, breaches: 0, empUses: 0 },
+    stats: { destroyed: 0, hits: 0, misses: 0, breaches: 0, empUses: 0, bosses: 0 },
   };
 }
 
@@ -124,7 +136,15 @@ export function spawnWord(
   return word;
 }
 
-/** One fixed update: time limit, words fall (slowed by ice), breaches, spawns, waves. */
+export function spawnBoss(state: MatchState, spawned: SpawnedBoss, events: GameEvent[]): Boss {
+  const boss = createBoss(spawned);
+  state.boss = boss;
+  state.lockedId = null;
+  events.push({ type: 'bossAlert', boss });
+  return boss;
+}
+
+/** One fixed update: time limit, words and boss fall (slowed by ice), breaches, spawns, waves. */
 export function stepMatch(
   state: MatchState,
   dt: number,
@@ -161,13 +181,47 @@ export function stepMatch(
     }
   }
 
-  const spawned = source.update(worldDt, words.length);
-  if (spawned) spawnWord(state, spawned, events);
+  if (state.boss) {
+    stepBoss(state, state.boss, dt, worldDt, events);
+    if (state.status !== 'playing') return;
+  } else if (state.bossRest > 0) {
+    state.bossRest = Math.max(0, state.bossRest - dt);
+  }
+
+  // The boss (and the calm after it) keeps the source waiting like a word on screen would.
+  const busy = state.boss || state.bossRest > 0 ? 1 : 0;
+  const spawned = source.update(worldDt, words.length + busy);
+  if (spawned?.kind === 'boss') spawnBoss(state, spawned, events);
+  else if (spawned) spawnWord(state, spawned, events);
 
   if (source.wave !== state.wave) {
     state.wave = source.wave;
     events.push({ type: 'wave', wave: state.wave });
   }
+}
+
+function stepBoss(state: MatchState, boss: Boss, dt: number, worldDt: number, events: GameEvent[]): void {
+  boss.prevY = boss.y;
+  if (boss.alert > 0) {
+    boss.alert = Math.max(0, boss.alert - dt);
+    if (boss.alert === 0) events.push({ type: 'bossEnter', boss });
+    return;
+  }
+  boss.y = Math.min(PERIMETER_Y, boss.y + boss.speed * worldDt);
+  if (boss.y < PERIMETER_Y) return;
+
+  // It got through: one lost target, and the next wave follows as usual.
+  state.stats.breaches++;
+  const lost = state.mode.damage ? Math.min(state.shield, CONFIG.boss.damage) : 0;
+  state.shield -= lost;
+  bossGone(state);
+  events.push({ type: 'bossBreach', boss, shield: state.shield, lost });
+  if (state.mode.damage && state.shield === 0) endMatch(state, 'shield', events);
+}
+
+function bossGone(state: MatchState): void {
+  state.boss = null;
+  state.bossRest = CONFIG.boss.restSeconds;
 }
 
 function breach(state: MatchState, word: Word, events: GameEvent[]): void {
@@ -187,6 +241,10 @@ export function typeChar(
   events: GameEvent[],
 ): void {
   if (state.status !== 'playing') return;
+  if (state.boss) {
+    typeBoss(state, state.boss, char, options, events);
+    return;
+  }
 
   const outcome = resolveKey(state.words, state.lockedId, char, options);
   if (outcome.kind === 'miss') {
@@ -230,6 +288,60 @@ export function typeChar(
     return;
   }
   destroyByTyping(state, word, events);
+}
+
+/** A key while a boss is here: the next letter of its current word, or an error. */
+function typeBoss(state: MatchState, boss: Boss, char: string, options: TypingOptions, events: GameEvent[]): void {
+  // Still arriving: keys do nothing (neither a hit nor an error).
+  if (boss.alert > 0) return;
+  const text = boss.words[boss.index] ?? '';
+  const expected = text[boss.typed];
+  if (expected === undefined || !charsMatch(expected, char, options)) {
+    state.stats.misses++;
+    boss.flawed = true;
+    const comboLost = state.combo.combo;
+    state.combo = updateCombo(state.combo, { type: 'miss' });
+    events.push({ type: 'miss', wordId: null, comboLost });
+    return;
+  }
+
+  state.stats.hits++;
+  events.push({ type: 'bossHit', boss, word: boss.index, index: boss.typed });
+  boss.typed++;
+  if (boss.typed < text.length) return;
+
+  const multiplierBefore = comboMultiplier(state.combo.combo);
+  const wasReady = isEmpReady(state.combo.charge);
+  state.combo = updateCombo(state.combo, { type: 'kill', flawed: boss.flawed });
+  const multiplier = comboMultiplier(state.combo.combo);
+  breakBossWord(state, boss, wordPoints(text.length, multiplier, boss.y), multiplier, 'typed', events);
+  if (multiplier > multiplierBefore) events.push({ type: 'multiplier', multiplier });
+  if (!wasReady && isEmpReady(state.combo.charge)) events.push({ type: 'empReady' });
+}
+
+/** The boss's current word is destroyed; the last one defeats it. */
+function breakBossWord(
+  state: MatchState,
+  boss: Boss,
+  points: number,
+  multiplier: number,
+  cause: Exclude<DestroyCause, 'bomb'>,
+  events: GameEvent[],
+): void {
+  const text = boss.words[boss.index] ?? '';
+  state.score += points;
+  state.stats.destroyed++;
+  events.push({ type: 'bossWord', boss, word: boss.index, text, points, multiplier, cause });
+  boss.index++;
+  boss.typed = 0;
+  boss.flawed = false;
+  if (boss.index < boss.words.length) return;
+
+  const bonus = bossBonus(boss.number);
+  state.score += bonus;
+  state.stats.bosses++;
+  bossGone(state);
+  events.push({ type: 'bossDefeated', boss, points: bonus });
 }
 
 function removeWord(state: MatchState, word: Word): void {
@@ -317,17 +429,25 @@ function areaKill(
   });
 }
 
-/** Space: with a full charge, destroys every word on screen (half points each). */
+/**
+ * Space: with a full charge, destroys every word on screen (half points each). A boss only
+ * loses its current word; while it is still arriving the charge is kept.
+ */
 export function activateEmp(state: MatchState, events: GameEvent[]): boolean {
   if (state.status !== 'playing') return false;
-  if (!isEmpReady(state.combo.charge)) {
+  const boss = state.boss;
+  if (!isEmpReady(state.combo.charge) || (boss !== null && boss.alert > 0)) {
     events.push({ type: 'empDenied' });
     return false;
   }
   const multiplier = comboMultiplier(state.combo.combo);
   state.combo = updateCombo(state.combo, { type: 'emp' });
   state.stats.empUses++;
-  events.push({ type: 'emp', count: state.words.length });
+  events.push({ type: 'emp', count: state.words.length + (boss ? 1 : 0) });
+  if (boss) {
+    const letters = boss.words[boss.index]?.length ?? 0;
+    breakBossWord(state, boss, areaKillPoints(letters, multiplier, boss.y), multiplier, 'emp', events);
+  }
   for (let i = state.words.length - 1; i >= 0; i--) {
     const word = state.words[i];
     if (word) areaKill(state, word, multiplier, 'emp', events);
@@ -336,9 +456,17 @@ export function activateEmp(state: MatchState, events: GameEvent[]): boolean {
   return true;
 }
 
-/** Backspace: releases the lock and resets that word's progress (armor already broken stays broken). */
+/**
+ * Backspace: releases the lock and resets that word's progress (armor already broken stays
+ * broken). On a boss: the current word starts over.
+ */
 export function unlockTarget(state: MatchState, events: GameEvent[]): void {
   if (state.status !== 'playing') return;
+  if (state.boss) {
+    if (state.boss.typed > 0) events.push({ type: 'unlock', wordId: null });
+    state.boss.typed = 0;
+    return;
+  }
   const word = lockedWord(state);
   state.lockedId = null;
   if (!word) return;

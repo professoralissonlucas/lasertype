@@ -63,18 +63,21 @@ src/
   game/
     Game.ts               # game loop (requestAnimationFrame, delta time fixo)
     state.ts              # estado da partida
-    spawner.ts            # geração de palavras e ondas (aceita seed)
+    spawner.ts            # geração de palavras, ondas e bosses (aceita seed)
+    boss.ts               # regras puras do boss (quando vem, frase, velocidade, bônus)
+    testing/typist.ts     # digitador simulado dos testes de balanceamento (o jogo não importa)
     targeting.ts          # lógica de mira/travamento
     input.ts              # captura de teclado, normalização de acentos
     scoring.ts            # pontuação, combo, nota final
-    entities/             # Word, Cannon, Laser, Particle
+    entities/             # Word, Boss, Cannon, Laser, Particle
     effects/              # partículas, screen shake, flash
     render/               # renderer.ts + funções de desenho parametrizadas por cosmético
-                          # (drawCannon, drawWord, drawFx, drawBackground) e Skin (cosméticos → sprites/cores)
+                          # (drawCannon, drawWord, drawBoss, drawFx, drawBackground) e Skin (cosméticos → sprites/cores)
+                          # bossLayout.ts: geometria pura da placa do boss
       cannon/             # camadas do canhão: model (pose e regras puras), kit (peças comuns),
                           # platforms, barrels, heads, muzzle; drawCannon.ts monta tudo (§7 "Canhão")
   modes/                  # survival, timeAttack, daily, zen; daily.ts: seed e dia do Desafio Diário
-  words/                  # listas pt-BR.json, en.json (por dificuldade)
+  words/                  # listas pt-BR.json, en.json (por dificuldade) e bosses.*.json (frases por tamanho)
   cosmetics/
     types.ts              # categorias, raridades, params tipados por categoria
     catalog.ts            # catálogo de itens (dados puros) + DISCOUNT_ORDER
@@ -151,7 +154,15 @@ firestore.rules           # CONTRATO do backend (ver §9)
 - **Combo:** cada palavra destruída digitando, sem nenhum erro enquanto estava travada, +1. Qualquer tecla errada (inclusive sem alvo) zera. Dano no escudo **não** zera. Multiplicador: 1x (0–4), 2x (5–14), 3x (15–29), 4x (30+). Lógica pura em `game/combo.ts` (reducer) e `game/scoring.ts`.
 - **Escudo:** 3 HP (também o máximo). Palavra que cruza o perímetro = −1 HP.
 - **EMP:** cada palavra destruída digitando carrega `5% × multiplicador` (20 palavras a 1x; bem menos com combo). Com 100%, `Espaço` destrói todas as palavras na tela por metade dos pontos, esvazia a barra e mantém o combo. Sem carga cheia = som de recusa.
-- **Ondas** (`game/waves.ts`): cada onda tem uma **cota fixa** de palavras (8, +2 por onda, máx. 30); intervalo ×0,92, velocidade +7%, mais palavras difíceis e especiais a cada onda (com tetos em `config.ts`). Como a cota é fixa, a N-ésima palavra pertence sempre à mesma onda e a sequência depende só da seed. Survival/Diário/Zen: após a última palavra da onda, espera a tela limpar e dá 2,5 s de respiro com o anúncio "Onda N"; Time Attack emenda as ondas. Boss a cada 5 ondas (frase que se divide em palavras) fica para a Fase 7.
+- **Ondas** (`game/waves.ts`): cada onda tem uma **cota fixa** de palavras (8, +2 por onda, máx. 30); intervalo ×0,92, velocidade +7%, mais palavras difíceis e especiais a cada onda (com tetos em `config.ts`). Como a cota é fixa, a N-ésima palavra pertence sempre à mesma onda e a sequência depende só da seed. Survival/Diário/Zen: após a última palavra da onda, espera a tela limpar e dá 2,5 s de respiro com o anúncio "Onda N"; Time Attack emenda as ondas. O boss fecha as ondas 5, 10, 15… (ver "Boss").
+- **Boss** (`game/boss.ts`, `CONFIG.boss`): a cada 5 ondas, com a tela limpa, uma frase grande entra com **3 s de alerta** e desce devagar. Nada mais cai enquanto ele está na tela; depois há 2 s de calma e a próxima onda. Vale nos modos com `waveBreak` (Survival, Diário, Zen); o Time Attack nunca chega à onda 5.
+  - Digita-se palavra por palavra, **em ordem e sem espaços** (Espaço é o EMP); toda tecla vai para ele. Cada palavra é um segmento da vida e pontua como uma palavra comum (combo, altura, carga do EMP, abate). Erro zera o combo e mantém a palavra; `Backspace` recomeça a palavra atual. Durante o alerta as teclas não fazem nada (nem acerto nem erro) e o EMP é recusado sem gastar a carga.
+  - EMP: destrói só a palavra atual, por metade dos pontos. Gelo também o desacelera.
+  - Perímetro: **−2 HP** (Zen: escapa sem dano), conta como 1 perda; o combo fica. Com 2 HP ou menos, fim de partida.
+  - Derrotar: 1.000 pontos, +500 por boss seguinte, até 2.500. O relatório mostra "Bosses derrotados" quando há algum.
+  - Frases: 8 por tamanho e idioma (24–30, 32–39 e 40–48 letras; boss 1, 2, e 3 em diante), só letras minúsculas e espaços simples. Sorteio com rng **próprio** (`seed:boss:tamanho`): nunca altera a sequência de palavras de uma seed, e o N-ésimo boss é igual para todos no Diário.
+  - Velocidade: `speedMultiplier da onda × preset de dificuldade / 30 s`.
+  - **Balanceamento** (`bossBalance.test.ts`, digitador simulado com as regras reais): o boss pede de 30% a 55% da velocidade de quem chega até ele, em todas as dificuldades. No Fácil, um iniciante (14% de erros, 0,8 s para ler cada palavra) vence todas as frases a 20 / 37 / 64 / 77 WPM nos bosses 1 a 4, e só chega a eles com ~36 / 100 / 190 WPM (ao 4º, não chega). Para ver o 1º boss: ~26–30 WPM no Fácil, ~38–42 no Normal, ~52–65 no Difícil. Se um ajuste quebrar esse teste, o boss virou uma parede: mexer em `CONFIG.boss`, não nos números do teste.
 - **Palavras especiais:** 💣 Bomba (destrói vizinhas), ❄️ Gelo (slow 3s), 🛡️ Escudo (+1 HP), ☠️ Blindada (digitar 2x).
   - Efeitos só disparam quando a palavra é destruída **digitando**; palavras pegas por bomba/EMP valem metade e não disparam efeito (sem reação em cadeia, EMP não cura).
   - Bomba: elipse de 0,2 largura × 0,22 altura do campo. Gelo: palavras e ritmo de spawn a 40% por 3 s (o relógio do Time Attack não desacelera). Escudo: +1 HP até o máximo. Blindada: 2 passadas, continua travada entre elas, letras contam em dobro na pontuação.
@@ -214,6 +225,13 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
 - Movimento (`entities/Cannon.ts`): giro por mola criticamente amortecida (acelera e assenta sem passar do alvo); no tiro, a mira encaixa no alvo (feixe e cano alinhados), o cano recua e volta com suavização (`recoilKick`), a boca brilha ~0,12 s, com clarão, faíscas e fumaça curta (aleatoriedade por `hashUnit` com o número do tiro: repetível, sem alocar). Parado, as luzes "respiram".
 - **Núcleo de energia:** `coreEnergy(multiplicador, carga do EMP)` vai de 0,2 (brasa) a 0,95; EMP pronto = 1, com ondas saindo do núcleo. Menus: 0,3. A prévia da loja carrega o núcleo conforme a palavra é atirada.
   - Modo daltônico e volume de música ficam para quando houver música/cosméticos de cor.
+
+### Boss (`render/drawBoss.ts` + `render/bossLayout.ts`)
+- Casco blindado em camadas (lâminas → coroa com o núcleo → casco → um encaixe por palavra), só com cores de jogo (`--danger`; a palavra atual com o contorno de alvo travado). Palavra destruída = buraco com rachaduras (`hashUnit`, repetível); o núcleo enfraquece com a vida. Frase em linhas equilibradas, sempre dentro do campo (fonte 1,25× a das palavras; 1× em campos < 520 px). `y` = borda **inferior** do casco.
+- Cada palavra solta **fragmentos visuais** (letras e pedaços de casco que caem; não são ameaça). Derrota: o casco fica na tela tremendo e esquentando durante 6 explosões em cadeia e se desfaz numa explosão final (cores do cosmético, ondas até a tela toda). `Effects.wreck` + fila de efeitos com atraso.
+- HUD: barra de vida segmentada (some durante o alerta), faixa de alerta, faixa de resultado, palavras e bônus no registro de combate. O alerta pulsa devagar (< 1 Hz) e nunca escurece; parado com "Reduzir efeitos" (`.is-reduced` na camada da UI) ou `prefers-reduced-motion`. Com "Reduzir efeitos" não há tremor nem flash na luta inteira.
+- Sons: `bossAlert` (sirene de 3 s), `bossWord`, `bossDown`; a quebra do perímetro usa `breach` mais grave.
+- Custo medido (Edge headless): +0,2 a 0,3 ms por quadro com o boss na tela.
 
 ### Configurações (`src/settings/`)
 - Salvas no `localStorage` em `lasertype.settings.v1` a cada mudança: idioma (interface **e** palavras), volume dos efeitos, reduzir efeitos, acentos obrigatórios, último modo e última dificuldade do menu.
@@ -450,7 +468,7 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Sons procedurais novos: compra e equipar. `__lasertype.economy` no gancho de desenvolvimento.
 - [x] **Fase 5 — Firebase:** Auth anônimo, envio de score, ranking, regras.
   - `firestore.rules` copiado do contrato com os dois ajustes autorizados: `diff` `'medium'` → `'normal'` (nome do código) e `maxPointsPerSecond` 1500 → **1977**.
-  - `maxPointsPerSecond` = `ceil(maior palavra × 2 passadas (blindada) × 10 × 4x × 1,5 / intervalo mínimo de spawn)` = `ceil(14 × 2 × 10 × 4 × 1,5 / 0,85)` = 1977 (`scoring.ts → maxPointsPerSecond`). O spawner solta no máximo 1 palavra por `waves.minInterval` em qualquer dificuldade; bomba/EMP pagam metade da mesma palavra; a rampa do combo só reduz (o teste simula a partida perfeita). Mudar o balanceamento → o teste de sincronia aponta o novo valor.
+  - `maxPointsPerSecond` = `ceil(maior palavra × 2 passadas (blindada) × 10 × 4x × 1,5 / intervalo mínimo de spawn)` = `ceil(14 × 2 × 10 × 4 × 1,5 / 0,85)` = 1977 (`scoring.ts → maxPointsPerSecond`). O spawner solta no máximo 1 palavra por `waves.minInterval` em qualquer dificuldade; bomba/EMP pagam metade da mesma palavra; a rampa do combo só reduz (o teste simula a partida perfeita). O boss não muda o limite: tudo o que ele vale (frase mais longa a 4x no alto + bônus máximo) cabe no que o limite permite durante os 3 s do alerta, em que não se pontua (teste em `rules.test.ts`). Mudar o balanceamento → o teste de sincronia aponta o novo valor.
   - Firebase carregado sob demanda (`firebase/app.ts`); sem config, nada é baixado. Auth anônimo + vínculo Google por popup, apelido local, envio de recorde, tela de ranking, aviso de conta trocada (§9).
   - Desconto da loja passou para a aritmética inteira do contrato (`Math.floor(price * 7 / 100) * 10`; mesmos valores).
   - Workflow com os secrets `VITE_FIREBASE_*`. Testado no navegador: login anônimo real e leitura do ranking (falha até o índice composto existir).
@@ -471,10 +489,12 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Desempenho do build (2026-11-22, gzip): carga inicial ≈ 56 KB (JS 48,2 + CSS 4,9 + HTML 2,5 + `boot.css`). Firebase fora do bundle inicial, em chunks dinâmicos pedidos logo após a inicialização, sem bloquear a primeira tela: núcleo 11,4, Auth 36,6, Firestore lite 39,0, App Check 5,5 (≈ 92 KB). O script do reCAPTCHA vem do Google, também em segundo plano. Nenhum `modulepreload` do Firebase no HTML; a ativação do debug token não entra no build de produção.
   - Pendências no console: registrar o app no App Check com a chave secreta do reCAPTCHA, registrar o debug token de desenvolvimento, criar o secret `VITE_RECAPTCHA_SITE_KEY` no GitHub e, depois de conferir as métricas, aplicar a imposição no Firestore e no Authentication.
 - [x] **Arte dos canhões (fora das fases, 2026-11-22):** os 4 canhões redesenhados em camadas (§7 "Canhão"), com o mesmo tamanho e a mesma boca; giro por mola, recuo por cano, clarão/faíscas/fumaça na boca, núcleo ligado ao combo e ao EMP. Revisado com as pranchas de `npm run share:images -- --cannons` e no jogo real (Edge headless). A imagem de compartilhamento foi regerada com o canhão novo. Custo: JS inicial 48,2 → 53,3 KB gzip.
-- [ ] **Fase 7 — Extras:** Desafio Diário (feito), boss, conquistas, coleções, suporte mobile.
+- [ ] **Fase 7 — Extras:** Desafio Diário (feito), boss (feito), conquistas, coleções, suporte mobile.
   - **Desafio Diário** (2026-11-22; §6 Modos, §8 "Bônus do Desafio Diário", §9 Ranking): modo `daily`, envio com `mode` 'daily' e `day = dayIndex()`, aba "Diário", contagem no card do menu e no ranking, bônus por posição. `firestore.rules` não mudou.
   - Testado com servidores falsos que aplicam os limites das regras, com o `App` completo no Edge headless (virada do dia com a tela aberta e no meio da partida, data do aparelho errada, dois bônus em sequência, fora do top 50, anônimo, build offline, 360 px) e conferindo o que o SDK do Firestore envia (com `fetch` simulado). Não testado contra o Firebase real.
   - Junto: o menu mais alto que a tela (celular) rola desde o topo (`justify-content: safe center`); antes, conta e saldo ficavam inalcançáveis.
+  - **Boss** (2026-11-22; §6 "Boss", §7 "Boss"): logo após cada 5ª onda. `firestore.rules` e a sequência de palavras não mudaram. Simulado com digitadores de várias velocidades nas 3 dificuldades e conferido no jogo real (Edge headless: alerta, teclas no alerta, fragmentos, EMP, derrota, −2 HP, fim de partida, pausa, reinício, "Reduzir efeitos", Zen, 360 px, 1366×640, 1920×1080). JS inicial 56,6 → ~63 KB gzip.
+  - Publicar o boss no meio do dia mistura, no quadro do Diário, partidas com e sem ele: publicar logo após as 00:00 de Brasília.
 
 ---
 

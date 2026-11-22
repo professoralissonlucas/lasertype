@@ -290,6 +290,103 @@ export function emitBlast(
   }
 }
 
+/** Pieces of the boss's hull breaking off around a destroyed word, plus sparks and a ring. */
+export function emitBossFragments(
+  pool: ParticlePool,
+  rng: Rng,
+  startX: number,
+  width: number,
+  y: number,
+  scale: number,
+): void {
+  const cx = startX + width / 2;
+  // Heavy plates tumbling down.
+  for (let i = 0, n = count(8 + width / 14, scale); i < n; i++) {
+    const p = pool.spawn('square', rng.next() < 0.55 ? 'danger' : 'text', startX + rng.next() * width, y, rng.range(0.7, 1.2));
+    if (!p) break;
+    p.vx = (p.x - cx) * rng.range(0.6, 2.2) + rng.range(-60, 60);
+    p.vy = rng.range(-220, -40);
+    p.gravity = 560;
+    p.drag = 0.6;
+    p.size = rng.range(3.5, 8);
+    p.sizeEnd = 1.5;
+  }
+  for (let i = 0, n = count(16, scale); i < n; i++) {
+    const p = pool.spawn('spark', rng.next() < 0.5 ? 'combo' : 'blast', startX + rng.next() * width, y, rng.range(0.25, 0.55));
+    if (!p) break;
+    const dir = rng.range(0, TAU);
+    const speed = rng.range(120, 380);
+    p.vx = Math.sin(dir) * speed;
+    p.vy = -Math.cos(dir) * speed;
+    p.drag = 3.5;
+    p.gravity = 180;
+    p.size = rng.range(1.2, 2.4);
+    p.sizeEnd = 0.4;
+  }
+  const ring = pool.spawn('ring', 'danger', cx, y, 0.35);
+  if (ring) {
+    ring.size = 8;
+    ring.sizeEnd = 30 + width * 0.5;
+  }
+}
+
+/** One of the blasts that tear a defeated boss apart (equipped explosion colors). */
+export function emitBossBlast(pool: ParticlePool, rng: Rng, x: number, y: number, radius: number, scale: number): void {
+  emitBlast(pool, x, y, radius, rng.next() < 0.5 ? 'blast' : 'blastAlt', 0.4);
+  for (let i = 0, n = count(14, scale); i < n; i++) {
+    const square = rng.next() < 0.4;
+    const p = pool.spawn(square ? 'square' : 'spark', rng.next() < 0.3 ? 'text' : 'blast', x, y, rng.range(0.4, 0.8));
+    if (!p) return;
+    const dir = rng.range(0, TAU);
+    const speed = rng.range(100, 380);
+    p.vx = Math.sin(dir) * speed;
+    p.vy = -Math.cos(dir) * speed;
+    p.drag = 2.6;
+    p.gravity = 200;
+    p.size = square ? rng.range(3, 6) : rng.range(1.2, 2.6);
+    p.sizeEnd = square ? 1 : 0.4;
+  }
+}
+
+/** The last, biggest burst of a defeated boss: shockwaves, embers and debris over the screen. */
+export function emitBossFinale(pool: ParticlePool, rng: Rng, x: number, y: number, reach: number, scale: number): void {
+  const colors: readonly FxColor[] = ['text', 'blast', 'blastAlt'];
+  for (const [i, color] of colors.entries()) {
+    const ring = pool.spawn('ring', color, x, y, 0.55 + i * 0.2);
+    if (!ring) return;
+    ring.size = 10;
+    ring.sizeEnd = reach * (0.55 + i * 0.3);
+  }
+  const glow = pool.spawn('glow', 'blast', x, y, 0.6);
+  if (glow) {
+    glow.size = Math.min(260, reach * 0.45);
+    glow.sizeEnd = 0;
+  }
+  for (let i = 0, n = count(90, scale); i < n; i++) {
+    const p = pool.spawn('spark', rng.next() < 0.3 ? 'text' : 'blast', x, y, rng.range(0.6, 1.2));
+    if (!p) return;
+    const dir = rng.range(0, TAU);
+    const speed = rng.range(200, 900);
+    p.vx = Math.sin(dir) * speed;
+    p.vy = -Math.cos(dir) * speed;
+    p.drag = 2.4;
+    p.gravity = 90;
+    p.size = rng.range(1.4, 3);
+    p.sizeEnd = 0.4;
+  }
+  for (let i = 0, n = count(26, scale); i < n; i++) {
+    const p = pool.spawn('glow', rng.next() < 0.4 ? 'blastAlt' : 'blast', x, y, rng.range(0.8, 1.5));
+    if (!p) return;
+    const dir = rng.range(0, TAU);
+    const speed = rng.range(40, 280);
+    p.vx = Math.sin(dir) * speed;
+    p.vy = -Math.cos(dir) * speed - 30;
+    p.drag = 1.6;
+    p.size = rng.range(8, 18);
+    p.sizeEnd = 0;
+  }
+}
+
 /** Shield restored: soft rising glows over the cannon. */
 export function emitShieldUp(pool: ParticlePool, rng: Rng, x: number, y: number): void {
   for (let i = 0; i < 10; i++) {

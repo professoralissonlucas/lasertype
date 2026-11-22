@@ -1,5 +1,5 @@
 // Wave difficulty curve (pure). Wave 1 uses CONFIG.spawn; each later wave is harder.
-// (The boss every 5 waves arrives in Phase 7.)
+// (The boss that closes every 5th wave: boss.ts.)
 import { CONFIG } from '../config.ts';
 import type { SpawnParams, WaveConfig, WaveParams } from './types.ts';
 

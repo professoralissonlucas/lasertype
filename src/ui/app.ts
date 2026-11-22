@@ -472,6 +472,7 @@ export class App {
     this.audio.setVolume(s.sfxVolume);
     this.gameInstance.setIdleReducedEffects(s.reduceEffects);
     this.screens.shop.setReducedEffects(s.reduceEffects);
+    this.layer.classList.toggle('is-reduced', s.reduceEffects);
     document.documentElement.lang = s.language;
   }
 

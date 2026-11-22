@@ -7,10 +7,12 @@ import { CONFIG } from '../config.ts';
 import { DISCOUNT_ORDER } from '../cosmetics/catalog.ts';
 import shopSource from '../economy/shop.ts?raw';
 import { discountedPrice } from '../economy/shop.ts';
-import { comboMultiplier, maxPointsPerSecond } from '../game/scoring.ts';
+import { bossBonus, bossNumber } from '../game/boss.ts';
+import { comboMultiplier, maxPointsPerSecond, wordPoints } from '../game/scoring.ts';
 import { GAME_DIFFICULTIES } from '../game/types.ts';
 import { DAY_MS, DAY_START_OFFSET_MS } from '../utils/day.ts';
-import { longestWordLength } from '../words/index.ts';
+import { waveParams } from '../game/waves.ts';
+import { longestBossPhrase, longestWordLength } from '../words/index.ts';
 import { LANGUAGES } from '../words/types.ts';
 import { buildScore, dailyBoard, MAX_POINTS_PER_SECOND, scoreDocId } from './leaderboard.ts';
 import { dailyBonusFields, equipFields, newUserFields, profileFields, purchaseFields, rewardFields } from './profile.ts';
@@ -197,6 +199,37 @@ describe('maxPointsPerSecond (theoretical maximum)', () => {
   it('= longest word × armored passes × 10 × 4x × 1.5 / min spawn interval', () => {
     expect(longestWordLength()).toBe(14);
     expect(maxPointsPerSecond(14)).toBeCloseTo((14 * 2 * 10 * 4 * 1.5) / 0.85, 6);
+  });
+
+  const topMultiplier = Math.max(...CONFIG.combo.tiers.map((tier) => tier.multiplier));
+  /** The most a boss can be worth: its longest phrase at the top multiplier, up high, plus the bonus. */
+  const bossWorth = (number: number) => wordPoints(longestBossPhrase(), topMultiplier, 0) + bossBonus(number);
+
+  it('a boss is paid for by its own entrance alert, when nothing can be scored', () => {
+    expect(bossWorth(1000)).toBeLessThanOrEqual(CONFIG.boss.alertSeconds * maxPointsPerSecond(longestWordLength()));
+  });
+
+  it('bounds the perfect match with bosses at every moment', () => {
+    const perWord = longestWordLength() * 2 * CONFIG.scoring.pointsPerLetter * CONFIG.scoring.highBonus * topMultiplier;
+    let time = CONFIG.spawn.firstDelay;
+    let score = 0;
+    for (let wave = 1; wave <= 120; wave++) {
+      const { wordCount } = waveParams(wave);
+      for (let i = 0; i < wordCount; i++) {
+        score += perWord;
+        // The first word of the match comes after firstDelay; the combo ramp (tested above) is ignored.
+        if (wave > 1 || i > 2) expect(score).toBeLessThanOrEqual(time * MAX_POINTS_PER_SECOND + perWord);
+        time += CONFIG.waves.minInterval;
+      }
+      const number = bossNumber(wave);
+      if (number > 0) {
+        time += CONFIG.boss.alertSeconds;
+        score += bossWorth(number);
+        expect(score).toBeLessThanOrEqual(time * MAX_POINTS_PER_SECOND);
+        time += CONFIG.boss.restSeconds;
+      }
+      time += CONFIG.waves.breakSeconds;
+    }
   });
 
   it('bounds every possible match length, combo ramp included', () => {

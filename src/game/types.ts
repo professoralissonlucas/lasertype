@@ -1,4 +1,5 @@
 import type { Difficulty } from '../words/types.ts';
+import type { Boss } from './entities/Boss.ts';
 
 /** How typed characters are compared against word letters. */
 export interface TypingOptions {
@@ -101,6 +102,24 @@ export interface SpecialConfig {
   readonly armorLayers: number;
 }
 
+/** The boss that closes every few waves (game/boss.ts). */
+export interface BossConfig {
+  /** Waves 5, 10, 15… end with a boss (modes with wave breaks only). */
+  readonly everyWaves: number;
+  /** Entrance alert: it neither descends nor can be typed yet. */
+  readonly alertSeconds: number;
+  /** Time to come down the whole field on Normal, at wave-1 speed. */
+  readonly fallSeconds: number;
+  /** Shield HP lost when it reaches the perimeter. */
+  readonly damage: number;
+  /** Calm after it is gone, before the next wave is announced. */
+  readonly restSeconds: number;
+  /** Points for defeating the first boss, added per later boss, and the cap. */
+  readonly firstBonus: number;
+  readonly bonusStep: number;
+  readonly maxBonus: number;
+}
+
 export interface ComboTier {
   /** Combo needed for this tier. */
   readonly min: number;
@@ -162,11 +181,21 @@ export interface SpawnedWord {
   readonly speed: number;
 }
 
-/** Anything that hands out new words over time (the Spawner, or a stub in tests). */
+export interface SpawnedBoss {
+  readonly kind: 'boss';
+  /** 1 for the first boss of the match. */
+  readonly number: number;
+  readonly phrase: string;
+  /** Descent in field heights per second. */
+  readonly speed: number;
+}
+
+/** Anything that hands out new words (and bosses) over time (the Spawner, or a stub in tests). */
 export interface WordSource {
   /** Current wave (announced to the player). */
   readonly wave: number;
-  update(dt: number, activeCount: number): SpawnedWord | null;
+  /** `activeCount` = what is on screen: the words plus the boss, if any. */
+  update(dt: number, activeCount: number): SpawnedWord | SpawnedBoss | null;
 }
 
 // ---------- Events ----------
@@ -181,7 +210,8 @@ export type EndReason = 'shield' | 'time' | 'quit';
 export type GameEvent =
   | { readonly type: 'spawn'; readonly wordId: number }
   | { readonly type: 'lock'; readonly wordId: number }
-  | { readonly type: 'unlock'; readonly wordId: number }
+  /** `wordId` is null for the boss's current word. */
+  | { readonly type: 'unlock'; readonly wordId: number | null }
   | {
       readonly type: 'hit';
       readonly wordId: number;
@@ -234,6 +264,24 @@ export type GameEvent =
       readonly damage: boolean;
     }
   | { readonly type: 'wave'; readonly wave: number }
+  /** A boss is coming: the entrance alert starts. (Boss events carry it for its geometry.) */
+  | { readonly type: 'bossAlert'; readonly boss: Readonly<Boss> }
+  /** The alert is over: it descends and can be typed. */
+  | { readonly type: 'bossEnter'; readonly boss: Readonly<Boss> }
+  | { readonly type: 'bossHit'; readonly boss: Readonly<Boss>; readonly word: number; readonly index: number }
+  /** One of its words was destroyed. */
+  | {
+      readonly type: 'bossWord';
+      readonly boss: Readonly<Boss>;
+      readonly word: number;
+      readonly text: string;
+      readonly points: number;
+      readonly multiplier: number;
+      readonly cause: Exclude<DestroyCause, 'bomb'>;
+    }
+  | { readonly type: 'bossDefeated'; readonly boss: Readonly<Boss>; readonly points: number }
+  /** It reached the perimeter. `lost` = shield HP it cost (0 without damage: Zen). */
+  | { readonly type: 'bossBreach'; readonly boss: Readonly<Boss>; readonly shield: number; readonly lost: number }
   | { readonly type: 'pause' }
   | { readonly type: 'resume' }
   | { readonly type: 'gameover'; readonly reason: EndReason };

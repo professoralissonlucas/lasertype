@@ -1,10 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import { CONFIG } from '../config.ts';
-import { getWordList } from '../words/index.ts';
+import { getBossPhrases, getWordList } from '../words/index.ts';
 import type { WordList } from '../words/types.ts';
+import { bossPhrase, bossSpeed } from './boss.ts';
 import { stripAccents } from './input.ts';
 import { Spawner, type SpawnerConfig } from './spawner.ts';
-import type { SpawnedWord, WaveConfig } from './types.ts';
+import type { SpawnedBoss, SpawnedWord, WaveConfig } from './types.ts';
 
 const BASE: SpawnerConfig = {
   spawn: CONFIG.spawn,
@@ -46,7 +47,7 @@ function play(spawner: Spawner, count: number, active: (i: number) => number, dt
   const got: SpawnedWord[] = [];
   for (let i = 0; got.length < count && i < 200_000; i++) {
     const word = spawner.update(dt, active(i));
-    if (word) got.push(word);
+    if (word && word.kind !== 'boss') got.push(word);
   }
   return got;
 }
@@ -77,7 +78,7 @@ describe('Spawner determinism', () => {
       const dt = i % 7 === 0 ? 0.05 : 1 / 60;
       const active = i % 300 < 100 ? CONFIG.spawn.maxActive : i % 5 === 0 ? 0 : 2;
       const word = timed.update(dt, active);
-      if (word) got.push(word);
+      if (word && word.kind !== 'boss') got.push(word);
     }
     expect(got).toEqual(expected);
 
@@ -201,6 +202,67 @@ describe('Spawner timing', () => {
     const spawner = new Spawner(1, ALPHABET, TIMING);
     expect(spawner.update(100, 0)).not.toBeNull();
     expect(spawner.update(0, 0)).toBeNull();
+  });
+});
+
+describe('Spawner bosses', () => {
+  const WITH_BOSS: SpawnerConfig = {
+    ...BASE,
+    boss: { config: CONFIG.boss, phrases: getBossPhrases('pt-BR'), difficultySpeed: 0.8 },
+  };
+
+  /** Everything released up to the start of `wave`, by a player who clears the screen at once. */
+  function upTo(spawner: Spawner, wave: number): { words: SpawnedWord[]; bosses: { boss: SpawnedBoss; wave: number; after: number }[] } {
+    const words: SpawnedWord[] = [];
+    const bosses: { boss: SpawnedBoss; wave: number; after: number }[] = [];
+    for (let i = 0; spawner.wave < wave && i < 200_000; i++) {
+      const spawned = spawner.update(0.1, 0);
+      if (spawned?.kind === 'boss') bosses.push({ boss: spawned, wave: spawner.wave, after: words.length });
+      else if (spawned) words.push(spawned);
+    }
+    return { words, bosses };
+  }
+
+  const wordsBefore = (wave: number) =>
+    Array.from({ length: wave }, (_, i) => Math.min(CONFIG.waves.maxWordCount, CONFIG.waves.firstWordCount + i * CONFIG.waves.wordCountStep)).reduce((a, b) => a + b, 0);
+
+  it('one boss closes waves 5, 10 and 15, after their last word', () => {
+    const { bosses } = upTo(new Spawner('s', getWordList('pt-BR'), WITH_BOSS), 17);
+    expect(bosses.map(({ wave, after }) => [wave, after])).toEqual([5, 10, 15].map((wave) => [wave, wordsBefore(wave)]));
+    expect(bosses.map(({ boss }) => boss)).toEqual(
+      [1, 2, 3].map((number) => ({
+        kind: 'boss',
+        number,
+        phrase: bossPhrase('s', number, getBossPhrases('pt-BR')),
+        speed: bossSpeed(number * 5, 0.8),
+      })),
+    );
+  });
+
+  it('never changes the words of a seed', () => {
+    const words = getWordList('pt-BR');
+    const plain = upTo(new Spawner('daily:2026-11-22', words, BASE), 17);
+    const withBoss = upTo(new Spawner('daily:2026-11-22', words, WITH_BOSS), 17);
+    expect(plain.bosses).toEqual([]);
+    expect(withBoss.words).toEqual(plain.words);
+  });
+
+  it('waits for a clear screen, then for the boss to be gone', () => {
+    const spawner = new Spawner('s', getWordList('pt-BR'), WITH_BOSS);
+    upTo(spawner, 5);
+    play(spawner, wordsBefore(5) - wordsBefore(4), () => 0, 0.5);
+    for (let i = 0; i < 50; i++) expect(spawner.update(0.5, 2)).toBeNull(); // words left on screen
+    expect(spawner.update(0.5, 0)?.kind).toBe('boss');
+    for (let i = 0; i < 50; i++) expect(spawner.update(0.5, 1)).toBeNull(); // the boss is there
+    expect(spawner.wave).toBe(5);
+    expect(spawner.update(0.5, 0)).toBeNull(); // gone: wave 6 is announced
+    expect(spawner.wave).toBe(6);
+    expect(spawner.update(CONFIG.waves.breakSeconds + 0.1, 0)?.kind).not.toBe('boss');
+  });
+
+  it('modes without wave breaks (Time Attack) have none', () => {
+    const { bosses } = upTo(new Spawner('s', getWordList('pt-BR'), { ...WITH_BOSS, waveBreak: false }), 12);
+    expect(bosses).toEqual([]);
   });
 });
 

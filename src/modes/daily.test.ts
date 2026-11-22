@@ -2,9 +2,9 @@ import { describe, expect, it } from 'vitest';
 import { CONFIG } from '../config.ts';
 import { applyDifficulty } from '../game/difficulty.ts';
 import { Spawner } from '../game/spawner.ts';
-import type { SpawnedWord } from '../game/types.ts';
+import type { SpawnedBoss, SpawnedWord } from '../game/types.ts';
 import { dayIndex } from '../utils/day.ts';
-import { getWordList } from '../words/index.ts';
+import { getBossPhrases, getWordList } from '../words/index.ts';
 import type { Language } from '../words/types.ts';
 import { dailySeed, matchContent } from './daily.ts';
 import { MODES } from './index.ts';
@@ -14,12 +14,13 @@ const at = (iso: string): number => Date.parse(iso);
 /** The spawner of a Daily Challenge, as Game builds it. */
 function dailySpawner(epochMs: number, lang: Language): Spawner {
   const { seed } = matchContent('daily', null, epochMs);
-  const difficulty = MODES.daily.fixedDifficulty ?? 'normal';
+  const preset = CONFIG.difficulty[MODES.daily.fixedDifficulty ?? 'normal'];
   return new Spawner(seed, getWordList(lang), {
-    spawn: applyDifficulty(CONFIG.spawn, CONFIG.difficulty[difficulty]),
+    spawn: applyDifficulty(CONFIG.spawn, preset),
     waves: CONFIG.waves,
     specials: CONFIG.specials,
     waveBreak: MODES.daily.waveBreak,
+    boss: { config: CONFIG.boss, phrases: getBossPhrases(lang), difficultySpeed: preset.speed },
   });
 }
 
@@ -28,7 +29,7 @@ function released(spawner: Spawner, count: number, dt: number, active: () => num
   const words: SpawnedWord[] = [];
   for (let step = 0; words.length < count && step < 1_000_000; step++) {
     const word = spawner.update(dt, active());
-    if (word) words.push(word);
+    if (word && word.kind !== 'boss') words.push(word);
   }
   expect(words).toHaveLength(count);
   return words;
@@ -78,6 +79,22 @@ describe('Daily Challenge sequence', () => {
     let calls = 0;
     const slow = released(dailySpawner(NIGHT, 'pt-BR'), count, 1 / 20, () => (calls++ % 50 === 0 ? 0 : CONFIG.spawn.maxActive - 1));
     expect(slow).toEqual(fast);
+  });
+
+  it('has the same bosses for everyone, another one the next day', () => {
+    const bosses = (epochMs: number, dt: number): SpawnedBoss[] => {
+      const spawner = dailySpawner(epochMs, 'pt-BR');
+      const found: SpawnedBoss[] = [];
+      for (let i = 0; spawner.wave < 16 && i < 1_000_000; i++) {
+        const spawned = spawner.update(dt, 0);
+        if (spawned?.kind === 'boss') found.push(spawned);
+      }
+      return found;
+    };
+    const today = bosses(MORNING, 1 / 60);
+    expect(today.map((boss) => boss.number)).toEqual([1, 2, 3]);
+    expect(bosses(NIGHT, 1 / 20)).toEqual(today);
+    expect(bosses(NIGHT + 2000, 1 / 20)).not.toEqual(today);
   });
 
   it('changes with the day and with the language', () => {

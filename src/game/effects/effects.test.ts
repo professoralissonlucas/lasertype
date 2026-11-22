@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { getItem } from '../../cosmetics/catalog.ts';
 import type { ExplosionParams } from '../../cosmetics/types.ts';
 import { createRng } from '../../utils/rng.ts';
+import { createBoss } from '../boss.ts';
 import { Effects } from './Effects.ts';
 import {
   emitArmorBreak,
@@ -22,6 +23,86 @@ const active = (pool: ParticlePool): Particle[] => pool.items.filter((p) => p.ac
 function run(update: (dt: number) => void, seconds: number): void {
   for (let t = 0; t < seconds; t += 1 / 60) update(1 / 60);
 }
+
+describe('boss effects', () => {
+  const boss = createBoss({ kind: 'boss', number: 1, phrase: 'sol mar', speed: 0.1 });
+  const defeat = (fx: Effects) => fx.bossDefeated(boss, 400, 200, 500, 120, 700);
+  /** The finale's shockwaves (the only rings this big). */
+  const finale = (fx: Effects) => active(fx.particles).filter((p) => p.kind === 'ring' && p.sizeEnd > 300).length;
+
+  it('a broken word throws its letters and heavy pieces of hull that fall', () => {
+    const fx = new Effects(false);
+    fx.bossWord('sol', 100, 15, 200);
+    const particles = active(fx.particles);
+    expect(particles.filter((p) => p.kind === 'glyph').map((p) => p.glyph)).toEqual(['s', 'o', 'l']);
+    const hull = particles.filter((p) => p.kind === 'square');
+    expect(hull.length).toBeGreaterThan(5);
+    for (const p of hull) expect(p.gravity).toBeGreaterThan(300);
+    expect(fx.shake.trauma).toBeGreaterThan(0);
+  });
+
+  it('a defeated boss goes off in a chain, its hull heating up, then the finale', () => {
+    const fx = new Effects(false);
+    defeat(fx);
+    expect(fx.particles.activeCount).toBe(0); // nothing on the very frame: the chain starts next
+    run((dt) => fx.update(dt), 0.3);
+    const early = active(fx.particles);
+    expect(early.length).toBeGreaterThan(10);
+    expect(finale(fx)).toBe(0);
+    expect(fx.wreck?.boss).toBe(boss);
+    const { heat } = fx.wreck ?? { heat: 0 };
+    run((dt) => fx.update(dt), 0.3);
+    expect(fx.wreck?.heat).toBeGreaterThan(heat);
+    run((dt) => fx.update(dt), 0.35);
+    expect(fx.wreck).toBeNull();
+    expect(finale(fx)).toBe(3);
+    expect(fx.flash.alpha).toBeGreaterThan(0.2);
+    expect(fx.shake.trauma).toBeGreaterThan(0.8);
+  });
+
+  it('"Reduzir efeitos": no shake or flash, half the particles, but the same story', () => {
+    const full = new Effects(false);
+    const reduced = new Effects(true);
+    for (const fx of [full, reduced]) {
+      fx.bossEnter();
+      fx.bossWord('sol', 100, 15, 200);
+      defeat(fx);
+      run((dt) => fx.update(dt), 1.05);
+    }
+    expect(reduced.shake.trauma).toBe(0);
+    expect(reduced.flash.alpha).toBe(0);
+    expect(reduced.particles.activeCount).toBeLessThan(full.particles.activeCount * 0.7);
+    expect(finale(reduced)).toBe(3);
+  });
+
+  it('a breach lights the perimeter; in Zen it does not', () => {
+    const hurt = new Effects(false);
+    hurt.bossBreach(400, 600, 500, true);
+    expect(hurt.perimeterPulse).toBe(1);
+    const zen = new Effects(false);
+    zen.bossBreach(400, 600, 500, false);
+    expect(zen.perimeterPulse).toBe(0);
+    expect(zen.particles.activeCount).toBeGreaterThan(0);
+  });
+
+  it('a restart cancels a chain in progress', () => {
+    const fx = new Effects(false);
+    defeat(fx);
+    run((dt) => fx.update(dt), 0.2);
+    fx.clear();
+    expect(fx.wreck).toBeNull();
+    run((dt) => fx.update(dt), 2);
+    expect(fx.particles.activeCount).toBe(0);
+  });
+
+  it('never fills the pool: the finale always fits', () => {
+    const fx = new Effects(false);
+    for (let i = 0; i < 9; i++) fx.bossWord('asteroide', 100, 15, 200);
+    defeat(fx);
+    run((dt) => fx.update(dt), 1);
+    expect(fx.particles.activeCount).toBeLessThan(fx.particles.items.length);
+  });
+});
 
 describe('ParticlePool', () => {
   it('spawns a particle with defaults reset', () => {

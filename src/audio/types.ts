@@ -17,6 +17,9 @@ export type SoundName =
   | 'empReady'
   | 'multiplier'
   | 'wave'
+  | 'bossAlert'
+  | 'bossWord'
+  | 'bossDown'
   | 'purchase'
   | 'equip';
 

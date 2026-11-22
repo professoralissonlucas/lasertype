@@ -9,7 +9,7 @@ import { matchContent, type MatchContent } from '../modes/daily.ts';
 import type { ModeRules } from '../modes/types.ts';
 import { aimAngle } from '../utils/math.ts';
 import { createRng } from '../utils/rng.ts';
-import { getWordList } from '../words/index.ts';
+import { getBossPhrases, getWordList } from '../words/index.ts';
 import type { Language, WordList } from '../words/types.ts';
 import { applyDifficulty } from './difficulty.ts';
 import { Effects } from './effects/Effects.ts';
@@ -17,6 +17,7 @@ import { Cannon } from './entities/Cannon.ts';
 import { LaserPool } from './entities/Laser.ts';
 import { KeyboardInput, type InputAction } from './input.ts';
 import { BackgroundState } from './render/background.ts';
+import { bossCenterX, bossLetterX, bossWordX, bossWordY } from './render/bossLayout.ts';
 import { barrelOf, coreEnergy, createCannonPose, IDLE_ENERGY, muzzleSideOffset } from './render/drawCannon.ts';
 import {
   letterCenterX,
@@ -53,6 +54,8 @@ const SHOT_PITCH_MAX_STEPS = 12;
 const STARFIELD_SEED = 'orbital-defense-stars';
 /** Glows for a shield pickup rise from just above the cannon dome (px). */
 const SHIELD_GLOW_OFFSET = 30;
+/** The boss crashing into the perimeter: the breach sound, lower. */
+const BOSS_BREACH_PITCH = 0.7;
 /** Continuous HUD values (time, WPM) refresh this often (s). */
 const HUD_REFRESH = 0.1;
 
@@ -192,11 +195,13 @@ export class Game {
   }
 
   private createSpawner(config: MatchConfig, words: WordList, content: MatchContent): Spawner {
+    const preset = CONFIG.difficulty[config.difficulty];
     return new Spawner(content.seed, words, {
-      spawn: applyDifficulty(CONFIG.spawn, CONFIG.difficulty[config.difficulty]),
+      spawn: applyDifficulty(CONFIG.spawn, preset),
       waves: CONFIG.waves,
       specials: CONFIG.specials,
       waveBreak: config.mode.waveBreak,
+      boss: { config: CONFIG.boss, phrases: getBossPhrases(config.lang), difficultySpeed: preset.speed },
     });
   }
 
@@ -305,9 +310,14 @@ export class Game {
       return;
     }
     const word = lockedWord(state);
+    const { boss } = state;
+    const { layout, charWidth } = this.renderer;
     let target = 0;
-    if (word) {
-      const { layout, charWidth } = this.renderer;
+    if (boss && boss.alert <= 0) {
+      const plate = this.renderer.bossPlate(boss);
+      const x = bossLetterX(layout, plate, boss.index, boss.typed);
+      target = aimAngle(layout.cannonX, layout.cannonY, x, bossWordY(plate, this.renderer.bossTop(boss), boss.index));
+    } else if (word) {
       const index = Math.min(word.typed, word.text.length - 1);
       const x = letterCenterX(layout, word.x, word.text.length, index, charWidth);
       target = aimAngle(layout.cannonX, layout.cannonY, x, toScreenY(layout, word.y));
@@ -324,9 +334,51 @@ export class Game {
 
     for (const event of this.events) {
       switch (event.type) {
-        case 'hit':
-          this.fire(event);
+        case 'hit': {
+          const x = letterCenterX(layout, event.x, event.length, event.index, charWidth);
+          this.fire(x, toScreenY(layout, event.y), event.index);
           break;
+        }
+        case 'bossAlert':
+          this.sound.play('bossAlert');
+          viewDirty = true;
+          break;
+        case 'bossEnter':
+          this.effects.bossEnter();
+          viewDirty = true;
+          break;
+        case 'bossHit': {
+          const plate = this.renderer.bossPlate(event.boss);
+          const y = bossWordY(plate, this.renderer.bossTop(event.boss), event.word);
+          this.fire(bossLetterX(layout, plate, event.word, event.index), y, event.index);
+          break;
+        }
+        case 'bossWord': {
+          const plate = this.renderer.bossPlate(event.boss);
+          const x = bossWordX(layout, plate, event.word);
+          const y = bossWordY(plate, this.renderer.bossTop(event.boss), event.word);
+          this.effects.bossWord(event.text, x, plate.charWidth, y);
+          this.effects.scorePopup(x + (event.text.length * plate.charWidth) / 2, y, event.points);
+          this.sound.play('bossWord');
+          viewDirty = true;
+          break;
+        }
+        case 'bossDefeated': {
+          const plate = this.renderer.bossPlate(event.boss);
+          const y = this.renderer.bossTop(event.boss) + plate.height / 2;
+          const reach = Math.hypot(layout.width, layout.height) / 2;
+          this.effects.bossDefeated(event.boss, bossCenterX(layout), y, plate.width, plate.height, reach);
+          this.sound.play('bossDown');
+          viewDirty = true;
+          break;
+        }
+        case 'bossBreach': {
+          const plate = this.renderer.bossPlate(event.boss);
+          this.effects.bossBreach(bossCenterX(layout), layout.perimeterY, plate.width, event.lost > 0);
+          this.sound.play(event.lost > 0 ? 'breach' : 'unlock', event.lost > 0 ? BOSS_BREACH_PITCH : 1);
+          viewDirty = true;
+          break;
+        }
         case 'miss':
           this.missFlash = MISS_FLASH_SECONDS;
           this.sound.play('miss');
@@ -412,11 +464,9 @@ export class Game {
     if (viewDirty) this.view.sync(match.state);
   }
 
-  /** A correct letter: snap the cannon, kick it back, fire the beam, spark the letter. */
-  private fire(hit: Extract<GameEvent, { type: 'hit' }>): void {
-    const { layout, charWidth } = this.renderer;
-    const tx = letterCenterX(layout, hit.x, hit.length, hit.index, charWidth);
-    const ty = toScreenY(layout, hit.y);
+  /** A correct letter at (tx, ty): snap the cannon, kick it back, fire the beam, spark the letter. */
+  private fire(tx: number, ty: number, letterIndex: number): void {
+    const { layout } = this.renderer;
     this.cannon.snapTo(aimAngle(layout.cannonX, layout.cannonY, tx, ty));
     this.aimHold = LASER_LIFETIME;
     const muzzle = muzzlePosition(layout, this.cannon.angle);
@@ -428,7 +478,7 @@ export class Game {
     const my = muzzle.y + Math.sin(this.cannon.angle) * side;
     this.lasers.fire(mx, my, tx, ty, LASER_LIFETIME);
     this.effects.impact(tx, ty, this.cannon.angle);
-    this.sound.play('shot', 1 + Math.min(hit.index, SHOT_PITCH_MAX_STEPS) * SHOT_PITCH_STEP);
+    this.sound.play('shot', 1 + Math.min(letterIndex, SHOT_PITCH_MAX_STEPS) * SHOT_PITCH_STEP);
   }
 
   private render(alpha: number): void {

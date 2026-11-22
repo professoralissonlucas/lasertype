@@ -2,6 +2,7 @@
 import type { DailyBonusConfig, EconomyConfig, SyncConfig } from './economy/types.ts';
 import type { RankingConfig } from './firebase/types.ts';
 import type {
+  BossConfig,
   ComboConfig,
   DifficultyPreset,
   GameDifficulty,
@@ -65,6 +66,23 @@ const SPECIALS: SpecialConfig = {
   slowSeconds: 3,
   slowFactor: 0.4,
   armorLayers: 1,
+};
+
+/**
+ * Boss every 5 waves. The descent is tuned so that beating it takes about half the typing
+ * speed needed to get there (game/bossBalance.test.ts plays it on every difficulty). The
+ * alert (no points can be scored) pays for the whole boss within maxPointsPerSecond, so
+ * firestore.rules does not change (firebase/rules.test.ts).
+ */
+const BOSS: BossConfig = {
+  everyWaves: 5,
+  alertSeconds: 3,
+  fallSeconds: 30,
+  damage: 2,
+  restSeconds: 2,
+  firstBonus: 1000,
+  bonusStep: 500,
+  maxBonus: 2500,
 };
 
 /** Multiplier 1x (combo 0–4), 2x (5–14), 3x (15–29), 4x (30+). */
@@ -183,6 +201,7 @@ export const CONFIG = {
   spawn: SPAWN,
   waves: WAVES,
   specials: SPECIALS,
+  boss: BOSS,
   combo: COMBO,
   scoring: SCORING,
   difficulty: DIFFICULTY,

@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LANGUAGES } from '../words/types.ts';
-import { CombatLogModel } from './combatLog.ts';
+import { createBoss } from '../game/boss.ts';
+import { CombatLogModel, logEntryOf } from './combatLog.ts';
 import { dailyPlaceText } from './dailyText.ts';
 import { createTranslator, interpolate, STRING_KEYS } from './i18n.ts';
 
@@ -50,6 +51,27 @@ describe('dailyPlaceText', () => {
     }
     expect(dailyPlaceText(pt, String, 1, 5000, 'en')).toBe('Você está em 1º hoje.');
     expect(dailyPlaceText(pt, String, 1, 10, 'pt-BR')).toBe('Você está em 1º hoje.');
+  });
+});
+
+describe('logEntryOf', () => {
+  const boss = createBoss({ kind: 'boss', number: 2, phrase: 'sol mar', speed: 0.1 });
+  const name = (n: number) => `Boss ${n}`;
+
+  it('logs the words of a boss and the bonus for defeating it', () => {
+    expect(logEntryOf({ type: 'bossWord', boss, word: 0, text: 'sol', points: 90, multiplier: 3, cause: 'typed' }, name)).toEqual({
+      text: 'sol',
+      kind: 'boss',
+      cause: 'typed',
+      points: 90,
+      multiplier: 3,
+    });
+    expect(logEntryOf({ type: 'bossDefeated', boss, points: 1500 }, name)).toMatchObject({ text: 'Boss 2', cause: 'bonus', points: 1500 });
+  });
+
+  it('ignores everything else', () => {
+    expect(logEntryOf({ type: 'bossAlert', boss }, name)).toBeNull();
+    expect(logEntryOf({ type: 'wave', wave: 2 }, name)).toBeNull();
   });
 });
 

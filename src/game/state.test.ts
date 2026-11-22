@@ -396,10 +396,10 @@ describe('modes', () => {
 
 describe('matchAccuracy', () => {
   it('is hits over all keys typed', () => {
-    expect(matchAccuracy({ destroyed: 0, hits: 9, misses: 1, breaches: 0, empUses: 0 })).toBeCloseTo(0.9);
+    expect(matchAccuracy({ destroyed: 0, hits: 9, misses: 1, breaches: 0, empUses: 0, bosses: 0 })).toBeCloseTo(0.9);
   });
 
   it('is 0 when nothing was typed', () => {
-    expect(matchAccuracy({ destroyed: 0, hits: 0, misses: 0, breaches: 0, empUses: 0 })).toBe(0);
+    expect(matchAccuracy({ destroyed: 0, hits: 0, misses: 0, breaches: 0, empUses: 0, bosses: 0 })).toBe(0);
   });
 });

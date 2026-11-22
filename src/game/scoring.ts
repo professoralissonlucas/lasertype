@@ -83,7 +83,9 @@ export function gradeFor(input: GradeInput, grading: GradingConfig = CONFIG.grad
  * per `waves.minInterval` seconds, on every difficulty (the floor applies after the
  * difficulty preset), and a word is worth at most its longest text × passes (armored) ×
  * pointsPerLetter × top combo multiplier × height bonus. Bomb/EMP kills pay half of that
- * for the same word, so they never raise the bound; the combo ramp only lowers it.
+ * for the same word, so they never raise the bound; the combo ramp only lowers it. A boss
+ * (its words plus the bonus) is worth less than what the limit allows during its entrance
+ * alert, when nothing can be scored (rules.test.ts).
  */
 export function maxPointsPerSecond(longestWord: number, config: typeof CONFIG = CONFIG): number {
   const passes = 1 + config.specials.armorLayers;

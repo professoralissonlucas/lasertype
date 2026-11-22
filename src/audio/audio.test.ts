@@ -11,6 +11,9 @@ describe('default sound recipes', () => {
     expect(NAMES.sort()).toEqual([
       'armor',
       'bomb',
+      'bossAlert',
+      'bossDown',
+      'bossWord',
       'breach',
       'emp',
       'empReady',

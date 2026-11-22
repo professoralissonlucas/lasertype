@@ -28,7 +28,7 @@ const END_TITLE: Readonly<Record<EndReason, StringKey>> = {
   quit: 'endQuit',
 };
 
-const STAT_KEYS = ['destroyed', 'lost', 'accuracy', 'wpm', 'maxCombo', 'wave', 'time', 'letters', 'errors', 'emp'] as const;
+const STAT_KEYS = ['destroyed', 'lost', 'accuracy', 'wpm', 'maxCombo', 'wave', 'time', 'letters', 'errors', 'emp', 'bosses'] as const;
 type StatKey = (typeof STAT_KEYS)[number];
 
 const STAT_LABEL: Readonly<Record<StatKey, StringKey>> = {
@@ -42,6 +42,7 @@ const STAT_LABEL: Readonly<Record<StatKey, StringKey>> = {
   letters: 'statLetters',
   errors: 'statErrors',
   emp: 'statEmp',
+  bosses: 'statBosses',
 };
 
 export class ReportScreen {
@@ -114,6 +115,7 @@ export class ReportScreen {
       letters: row('letters'),
       errors: row('errors'),
       emp: row('emp'),
+      bosses: row('bosses'),
     };
 
     const actions = el('div', 'panel__actions panel__actions--row');
@@ -162,8 +164,11 @@ export class ReportScreen {
       letters: String(report.letters),
       errors: String(report.errors),
       emp: String(report.empUses),
+      bosses: String(report.bosses),
     };
     for (const key of STAT_KEYS) this.stats[key].textContent = values[key];
+    // Only matches that beat one show the row.
+    this.stats.bosses.parentElement?.toggleAttribute('hidden', report.bosses === 0);
     this.root.hidden = false;
   }
 

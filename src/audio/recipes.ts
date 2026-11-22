@@ -136,6 +136,52 @@ export const DEFAULT_SOUNDS: SoundPack = {
     ],
   },
 
+  // Boss coming: three siren sweeps over a low rumble (the length of the entrance alert).
+  bossAlert: {
+    pitchJitter: 0,
+    cooldown: 1,
+    layers: [
+      { kind: 'tone', wave: 'sawtooth', freq: 330, freqEnd: 660, attack: 0.04, duration: 0.8, gain: 0.07 },
+      { kind: 'tone', wave: 'square', freq: 165, freqEnd: 330, attack: 0.04, duration: 0.8, gain: 0.04 },
+      { kind: 'tone', wave: 'sawtooth', freq: 330, freqEnd: 660, attack: 0.04, duration: 0.8, gain: 0.07, delay: 0.95 },
+      { kind: 'tone', wave: 'square', freq: 165, freqEnd: 330, attack: 0.04, duration: 0.8, gain: 0.04, delay: 0.95 },
+      { kind: 'tone', wave: 'sawtooth', freq: 330, freqEnd: 660, attack: 0.04, duration: 0.8, gain: 0.07, delay: 1.9 },
+      { kind: 'tone', wave: 'square', freq: 165, freqEnd: 330, attack: 0.04, duration: 0.8, gain: 0.04, delay: 1.9 },
+      { kind: 'noise', filter: 'lowpass', cutoff: 180, cutoffEnd: 90, q: 1, attack: 0.1, duration: 1, gain: 0.22 },
+      { kind: 'noise', filter: 'lowpass', cutoff: 180, cutoffEnd: 90, q: 1, attack: 0.1, duration: 1, gain: 0.24, delay: 1 },
+      { kind: 'noise', filter: 'lowpass', cutoff: 220, cutoffEnd: 60, q: 1, attack: 0.1, duration: 1, gain: 0.28, delay: 2 },
+    ],
+  },
+
+  // A word of the boss destroyed: hull tearing (metal crunch) over a heavy thump.
+  bossWord: {
+    pitchJitter: 0.05,
+    cooldown: 0.05,
+    layers: [
+      { kind: 'noise', filter: 'bandpass', cutoff: 1500, cutoffEnd: 500, q: 4, attack: 0.002, duration: 0.25, gain: 0.24 },
+      { kind: 'noise', filter: 'lowpass', cutoff: 1800, cutoffEnd: 120, q: 0.8, attack: 0.003, duration: 0.5, gain: 0.34 },
+      { kind: 'tone', wave: 'sine', freq: 110, freqEnd: 38, attack: 0.003, duration: 0.38, gain: 0.32 },
+      { kind: 'tone', wave: 'square', freq: 900, freqEnd: 280, attack: 0.001, duration: 0.09, gain: 0.05 },
+    ],
+  },
+
+  // Boss defeated: a chain of blasts, one huge explosion, then a rising fanfare.
+  bossDown: {
+    pitchJitter: 0,
+    cooldown: 1,
+    layers: [
+      { kind: 'noise', filter: 'lowpass', cutoff: 1600, cutoffEnd: 140, q: 0.8, attack: 0.003, duration: 0.35, gain: 0.3 },
+      { kind: 'noise', filter: 'lowpass', cutoff: 1900, cutoffEnd: 140, q: 0.8, attack: 0.003, duration: 0.35, gain: 0.32, delay: 0.26 },
+      { kind: 'noise', filter: 'lowpass', cutoff: 2200, cutoffEnd: 140, q: 0.8, attack: 0.003, duration: 0.4, gain: 0.34, delay: 0.52 },
+      { kind: 'noise', filter: 'lowpass', cutoff: 2600, cutoffEnd: 50, q: 0.7, attack: 0.004, duration: 1, gain: 0.48, delay: 0.9 },
+      { kind: 'tone', wave: 'sine', freq: 95, freqEnd: 24, attack: 0.004, duration: 1, gain: 0.42, delay: 0.9 },
+      { kind: 'tone', wave: 'triangle', freq: 523, attack: 0.005, duration: 0.2, gain: 0.1, delay: 1.25 },
+      { kind: 'tone', wave: 'triangle', freq: 659, attack: 0.005, duration: 0.2, gain: 0.1, delay: 1.37 },
+      { kind: 'tone', wave: 'triangle', freq: 784, attack: 0.005, duration: 0.2, gain: 0.11, delay: 1.49 },
+      { kind: 'tone', wave: 'triangle', freq: 1047, attack: 0.005, duration: 0.6, gain: 0.12, delay: 1.61 },
+    ],
+  },
+
   // Game over: three falling notes over a low tone.
   gameover: {
     pitchJitter: 0,

@@ -5,12 +5,16 @@
 //   fixed word quota, so the N-th word always belongs to the same wave and the sequence
 //   depends only on the seed — never on what the player does (Daily Challenge).
 // - `update()` decides *when* to release the next word: spawn interval, screen limit,
-//   and (in modes with wave breaks) waiting for a clear screen plus a short break.
+//   and (in modes with wave breaks) waiting for a clear screen plus a short break. Every
+//   few waves a boss comes in that clear screen, before the next wave (boss.ts).
 import { createRng, pickWeighted, type Rng } from '../utils/rng.ts';
-import { DIFFICULTIES, type WordList } from '../words/types.ts';
+import { DIFFICULTIES, type BossPhrases, type WordList } from '../words/types.ts';
+import { bossNumber, bossPhrase, bossSpeed } from './boss.ts';
 import { stripAccents } from './input.ts';
 import { pickWordKind } from './specials.ts';
 import type {
+  BossConfig,
+  SpawnedBoss,
   SpawnedWord,
   SpawnParams,
   SpecialConfig,
@@ -20,12 +24,21 @@ import type {
 } from './types.ts';
 import { waveParams } from './waves.ts';
 
+export interface BossSource {
+  readonly config: BossConfig;
+  readonly phrases: BossPhrases;
+  /** Fall speed multiplier of the difficulty preset. */
+  readonly difficultySpeed: number;
+}
+
 export interface SpawnerConfig {
   readonly spawn: SpawnParams;
   readonly waves: WaveConfig;
   readonly specials: SpecialConfig;
   /** Survival/Zen: after a wave's last word, wait for a clear screen and a break. */
   readonly waveBreak: boolean;
+  /** Without it there are no bosses. They also need `waveBreak` (they fight on a clear screen). */
+  readonly boss?: BossSource;
 }
 
 type Phase = 'spawning' | 'waitingForClear' | 'break';
@@ -41,6 +54,7 @@ function pushBounded<T>(list: T[], value: T, max: number): void {
 }
 
 export class Spawner implements WordSource {
+  private readonly seed: number | string;
   private readonly rng: Rng;
   private readonly words: WordList;
   private readonly config: SpawnerConfig;
@@ -58,11 +72,14 @@ export class Spawner implements WordSource {
 
   private phase: Phase = 'spawning';
   private timer: number;
+  /** Last wave whose boss was released. */
+  private bossWave = 0;
 
   constructor(seed: number | string, words: WordList, config: SpawnerConfig) {
     for (const tier of DIFFICULTIES) {
       if (words[tier].length === 0) throw new Error(`Spawner: tier "${tier}" has no words`);
     }
+    this.seed = seed;
     this.rng = createRng(seed);
     this.words = words;
     this.config = config;
@@ -75,10 +92,12 @@ export class Spawner implements WordSource {
     return this.currentWave;
   }
 
-  /** Advances the timers; returns a word when it is time to release one. */
-  update(dt: number, activeCount: number): SpawnedWord | null {
+  /** Advances the timers; returns a word (or a boss) when it is time to release one. */
+  update(dt: number, activeCount: number): SpawnedWord | SpawnedBoss | null {
     if (this.phase === 'waitingForClear') {
       if (activeCount > 0) return null;
+      const boss = this.takeBoss();
+      if (boss) return boss; // and wait for it to be gone
       // Screen clear: announce the next wave now and give the player a breather.
       this.enterWave(this.contentWave);
       this.phase = 'break';
@@ -129,6 +148,22 @@ export class Spawner implements WordSource {
       this.contentParams = waveParams(this.contentWave, spawn, this.config.waves);
     }
     return { text, difficulty, kind, x, speed };
+  }
+
+  /** The boss that closes the current wave, once; null when it has none (or it was released). */
+  private takeBoss(): SpawnedBoss | null {
+    const { boss, spawn, waves } = this.config;
+    const wave = this.currentWave;
+    if (!boss || this.bossWave === wave) return null;
+    const number = bossNumber(wave, boss.config);
+    if (number === 0) return null;
+    this.bossWave = wave;
+    return {
+      kind: 'boss',
+      number,
+      phrase: bossPhrase(this.seed, number, boss.phrases),
+      speed: bossSpeed(wave, boss.difficultySpeed, boss.config, spawn, waves),
+    };
   }
 
   private enterWave(wave: number): void {
