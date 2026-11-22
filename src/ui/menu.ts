@@ -1,4 +1,5 @@
 // Main menu: mode, difficulty and language, then Play. Enter anywhere in the form plays.
+// Also shows the coin balance and leads to the shop and the settings.
 import { GAME_DIFFICULTIES, type GameDifficulty } from '../game/types.ts';
 import { MODE_IDS, type ModeId } from '../modes/types.ts';
 import { LANGUAGES, type Language } from '../words/types.ts';
@@ -15,6 +16,7 @@ export interface MenuCallbacks {
   onPlay(choice: MenuChoice): void;
   onChange(choice: MenuChoice): void;
   onSettings(): void;
+  onShop(): void;
 }
 
 export class MenuScreen {
@@ -22,11 +24,31 @@ export class MenuScreen {
   private choice: MenuChoice;
   private readonly form: HTMLFormElement;
   private readonly playButton: HTMLButtonElement;
+  private readonly t: Translate;
+  private readonly formatNumber: (value: number) => string;
+  private readonly wallet: HTMLElement;
+  private readonly walletValue: HTMLElement;
 
-  constructor(t: Translate, initial: MenuChoice, callbacks: MenuCallbacks) {
+  constructor(
+    t: Translate,
+    formatNumber: (value: number) => string,
+    initial: MenuChoice,
+    coins: number,
+    callbacks: MenuCallbacks,
+  ) {
+    this.t = t;
+    this.formatNumber = formatNumber;
     this.choice = initial;
     this.root = el('section', 'screen menu');
     this.root.setAttribute('aria-labelledby', 'menu-title');
+
+    this.wallet = el('div', 'wallet menu__wallet');
+    this.wallet.setAttribute('role', 'status');
+    this.walletValue = el('span', 'coins__value');
+    const amount = el('span', 'coins');
+    amount.append(el('span', 'coin'), this.walletValue);
+    this.wallet.append(amount);
+    this.setCoins(coins);
 
     const header = el('header', 'menu__header');
     const title = el('h1', 'menu__title', 'Laser Type');
@@ -71,7 +93,11 @@ export class MenuScreen {
     this.playButton.type = 'submit';
     this.playButton.append(el('span', undefined, t('play')), el('kbd', undefined, 'Enter'));
     const actions = el('div', 'menu__actions');
-    actions.append(this.playButton, button('btn', t('settings'), () => callbacks.onSettings()));
+    actions.append(
+      this.playButton,
+      button('btn', t('shop'), () => callbacks.onShop()),
+      button('btn', t('settings'), () => callbacks.onSettings()),
+    );
 
     form.append(modes, row, actions);
     form.addEventListener('submit', (event) => {
@@ -79,7 +105,13 @@ export class MenuScreen {
       callbacks.onPlay(this.choice);
     });
 
-    this.root.append(header, form);
+    this.root.append(this.wallet, header, form);
+  }
+
+  setCoins(coins: number): void {
+    const text = this.formatNumber(coins);
+    this.walletValue.textContent = text;
+    this.wallet.setAttribute('aria-label', `${this.t('coins')}: ${text}`);
   }
 
   setVisible(visible: boolean): void {

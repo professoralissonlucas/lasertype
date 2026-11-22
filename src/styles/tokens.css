@@ -7,6 +7,12 @@
   --text: #e2e8f0;
   --muted: #64748b;
 
+  /* Cosmetic rarities (UI only). */
+  --rarity-common: #94a3b8;
+  --rarity-rare: #22d3ee;
+  --rarity-epic: #a78bfa;
+  --rarity-legendary: #fbbf24;
+
   /* Self-hosted Orbitron / JetBrains Mono go in public/fonts/; system fallbacks until then. */
   --font-display: 'Orbitron', 'Segoe UI', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, monospace;

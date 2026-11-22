@@ -3,6 +3,8 @@
 // animated background; `startMatch` begins a match, `stopMatch` returns to idle.
 import type { SoundPlayer } from '../audio/types.ts';
 import { CONFIG } from '../config.ts';
+import { DEFAULT_COSMETICS } from '../cosmetics/equip.ts';
+import type { ResolvedCosmetics } from '../cosmetics/types.ts';
 import type { ModeRules } from '../modes/types.ts';
 import { aimAngle } from '../utils/math.ts';
 import { createRng } from '../utils/rng.ts';
@@ -14,6 +16,7 @@ import { Cannon } from './entities/Cannon.ts';
 import { LaserPool } from './entities/Laser.ts';
 import { KeyboardInput, type InputAction } from './input.ts';
 import { BackgroundState } from './render/background.ts';
+import { muzzleSideOffset } from './render/drawCannon.ts';
 import {
   letterCenterX,
   muzzlePosition,
@@ -93,7 +96,10 @@ export class Game {
   private readonly background = new BackgroundState(createRng(STARFIELD_SEED));
   private readonly events: GameEvent[] = [];
   private effects = new Effects(false);
+  private cosmetics: ResolvedCosmetics = DEFAULT_COSMETICS;
   private match: ActiveMatch | null = null;
+  /** Shots fired (twin barrels alternate sides). */
+  private shots = 0;
   /** Background drift outside matches (menus follow the "Reduzir efeitos" setting too). */
   private idleReducedEffects = false;
   private missFlash = 0;
@@ -129,9 +135,16 @@ export class Game {
     this.idleReducedEffects = reduced;
   }
 
+  /** Equipped cosmetics (visual only; may change at any time, even mid-match). */
+  setCosmetics(cosmetics: ResolvedCosmetics): void {
+    this.cosmetics = cosmetics;
+    this.renderer.setCosmetics(cosmetics);
+    this.effects.explosionStyle = cosmetics.explosion;
+  }
+
   startMatch(config: MatchConfig): void {
     const words = getWordList(config.lang);
-    this.effects = new Effects(config.reduceEffects);
+    this.effects = new Effects(config.reduceEffects, undefined, this.cosmetics.explosion);
     this.match = {
       config,
       words,
@@ -404,7 +417,11 @@ export class Game {
     this.cannon.kick();
     this.aimHold = LASER_LIFETIME;
     const muzzle = muzzlePosition(layout, this.cannon.angle);
-    this.lasers.fire(muzzle.x, muzzle.y, tx, ty, LASER_LIFETIME);
+    // Sideways offset (twin barrels): perpendicular to the barrel direction.
+    const side = muzzleSideOffset(this.cosmetics.cannon, this.shots++);
+    const mx = muzzle.x + Math.cos(this.cannon.angle) * side;
+    const my = muzzle.y + Math.sin(this.cannon.angle) * side;
+    this.lasers.fire(mx, my, tx, ty, LASER_LIFETIME);
     this.effects.impact(tx, ty, this.cannon.angle);
     this.sound.play('shot', 1 + Math.min(hit.index, SHOT_PITCH_MAX_STEPS) * SHOT_PITCH_STEP);
   }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createRng, hashString, pickWeighted } from './rng.ts';
+import { createRng, hashString, pickWeighted, shuffled } from './rng.ts';
 
 describe('createRng', () => {
   it('is deterministic for the same seed', () => {
@@ -79,5 +79,25 @@ describe('pickWeighted', () => {
 
   it('throws without any positive weight', () => {
     expect(() => pickWeighted(createRng(3), keys, { easy: 0, medium: 0, hard: -1 })).toThrow();
+  });
+});
+
+describe('shuffled', () => {
+  it('returns a permutation and leaves the input alone', () => {
+    const items = [1, 2, 3, 4, 5, 6, 7, 8];
+    const out = shuffled(createRng('s'), items);
+    expect([...out].sort((a, b) => a - b)).toEqual(items);
+    expect(items).toEqual([1, 2, 3, 4, 5, 6, 7, 8]);
+  });
+
+  it('is deterministic for a seed and varies between seeds', () => {
+    const items = Array.from({ length: 20 }, (_, i) => i);
+    expect(shuffled(createRng('a'), items)).toEqual(shuffled(createRng('a'), items));
+    expect(shuffled(createRng('a'), items)).not.toEqual(shuffled(createRng('b'), items));
+  });
+
+  it('handles empty and single-item lists', () => {
+    expect(shuffled(createRng(1), [])).toEqual([]);
+    expect(shuffled(createRng(1), ['x'])).toEqual(['x']);
   });
 });

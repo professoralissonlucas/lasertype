@@ -6,6 +6,15 @@ export function formatTime(seconds: number): string {
   return `${minutes}:${rest.toString().padStart(2, '0')}`;
 }
 
+/** Formats a countdown in milliseconds as `h:mm:ss` (e.g. 5h 3min 9s → "5:03:09"). */
+export function formatCountdown(ms: number): string {
+  const total = Math.max(0, Math.ceil(ms / 1000));
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
+  const seconds = total % 60;
+  return `${hours}:${minutes.toString().padStart(2, '0')}:${seconds.toString().padStart(2, '0')}`;
+}
+
 /** Integer formatter with the locale's thousands separator ("12.340" in pt-BR, "12,340" in en). */
 export function createIntegerFormatter(locale: string): (value: number) => string {
   const format = new Intl.NumberFormat(locale, { maximumFractionDigits: 0 });

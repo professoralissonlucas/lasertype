@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { getItem } from '../../cosmetics/catalog.ts';
+import type { ExplosionParams } from '../../cosmetics/types.ts';
 import { createRng } from '../../utils/rng.ts';
 import { Effects } from './Effects.ts';
 import {
@@ -281,5 +283,88 @@ describe('Effects', () => {
     expect(fx.shake.trauma).toBe(0);
     expect(fx.flash.alpha).toBe(0);
     expect(fx.perimeterPulse).toBe(0);
+  });
+});
+
+describe('cosmetic explosions', () => {
+  const style = (id: string): ExplosionParams => {
+    const item = getItem(id);
+    if (item?.type !== 'explosion') throw new Error(`not an explosion: ${id}`);
+    return item.params;
+  };
+
+  it('impacts use the laser color slot', () => {
+    const pool = new ParticlePool(50);
+    emitImpact(pool, createRng(10), 0, 0, 0, 1);
+    expect(active(pool).some((p) => p.color === 'laser')).toBe(true);
+    expect(active(pool).every((p) => p.color === 'laser' || p.color === 'text')).toBe(true);
+  });
+
+  it('the default explosion uses the blast slots and one ring', () => {
+    const pool = new ParticlePool(200);
+    emitExplosion(pool, createRng(11), 'gato', 0, 10, 0, 1);
+    expect(active(pool).filter((p) => p.kind === 'ring')).toHaveLength(1);
+    const colors = new Set(active(pool).map((p) => p.color));
+    expect([...colors].every((c) => c === 'text' || c === 'blast' || c === 'blastAlt')).toBe(true);
+  });
+
+  it('supernova: more debris and a second shockwave', () => {
+    const base = new ParticlePool(400);
+    const nova = new ParticlePool(400);
+    emitExplosion(base, createRng(12), 'planeta', 0, 10, 0, 1);
+    emitExplosion(nova, createRng(12), 'planeta', 0, 10, 0, 1, style('explosion_supernova'));
+    expect(nova.activeCount).toBeGreaterThan(base.activeCount);
+    expect(active(nova).filter((p) => p.kind === 'ring')).toHaveLength(2);
+  });
+
+  it('disintegration: letters crumble into floating pixels', () => {
+    const pool = new ParticlePool(400);
+    emitExplosion(pool, createRng(13), 'luz', 0, 10, 0, 1, style('explosion_disintegrate'));
+    const squares = active(pool).filter((p) => p.kind === 'square');
+    expect(squares.length).toBeGreaterThan(3 * 3);
+    expect(squares.some((p) => p.gravity < 0)).toBe(true);
+    // Each letter only flashes in place (no flying glyphs).
+    for (const glyph of active(pool).filter((p) => p.kind === 'glyph')) {
+      expect(glyph.vx).toBe(0);
+      expect(glyph.vy).toBe(0);
+    }
+  });
+
+  it('implosion: debris converges on the word and the first ring closes in', () => {
+    const pool = new ParticlePool(400);
+    const cx = 15; // 'luz' from x = 0 with 10 px letters
+    emitExplosion(pool, createRng(14), 'luz', 0, 10, 50, 1, style('explosion_implosion'));
+    const sparks = active(pool).filter((p) => p.kind === 'spark');
+    expect(sparks.length).toBeGreaterThan(5);
+    for (const p of sparks) {
+      // Moving toward the center: velocity points from the particle to (cx, 50).
+      expect((cx - p.x) * p.vx + (50 - p.y) * p.vy).toBeGreaterThan(0);
+    }
+    const rings = active(pool).filter((p) => p.kind === 'ring');
+    expect(rings[0]?.sizeEnd).toBeLessThan(rings[0]?.size ?? 0);
+    expect(rings[1]?.sizeEnd).toBeGreaterThan(rings[1]?.size ?? 0);
+    // Letters are pulled into the middle.
+    const glyphs = active(pool).filter((p) => p.kind === 'glyph');
+    expect(glyphs[0]?.vx).toBeGreaterThan(0);
+    expect(glyphs[2]?.vx).toBeLessThan(0);
+  });
+
+  it('every catalog explosion settles and never overflows a small pool', () => {
+    for (const id of ['explosion_fragment', 'explosion_supernova', 'explosion_disintegrate', 'explosion_implosion']) {
+      const small = new ParticlePool(6);
+      emitExplosion(small, createRng(15), 'paralelepípedo', 0, 10, 0, 1, style(id));
+      expect(small.items).toHaveLength(6);
+      const fx = new Effects(false, 'fx', style(id));
+      fx.explosion('planeta', 0, 10, 100);
+      run((dt) => fx.update(dt), 2);
+      expect(fx.particles.activeCount, id).toBe(0);
+    }
+  });
+
+  it('Effects uses the equipped explosion style', () => {
+    const fx = new Effects(false, 'fx');
+    fx.explosionStyle = style('explosion_disintegrate');
+    fx.explosion('sol', 0, 10, 100);
+    expect(fx.particles.items.some((p) => p.active && p.kind === 'square')).toBe(true);
   });
 });

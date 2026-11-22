@@ -1,5 +1,6 @@
 // Interface texts. pt-BR is the reference; every language must define every key
 // (enforced by the Record type). Placeholders like {n} are filled by `t(key, { n })`.
+import type { CosmeticType, Rarity } from '../cosmetics/types.ts';
 import type { Grade, GameDifficulty } from '../game/types.ts';
 import type { ModeId } from '../modes/types.ts';
 import type { Language } from '../words/types.ts';
@@ -12,6 +13,8 @@ const PT_BR = {
   menuLanguage: 'Idioma',
   play: 'Jogar',
   settings: 'Configurações',
+  shop: 'Loja',
+  coins: 'Moedas',
   modeSurvival: 'Survival',
   modeSurvivalDesc: 'Sem fim. Resista até o escudo cair.',
   modeTimeAttack: 'Time Attack',
@@ -76,6 +79,44 @@ const PT_BR = {
   statEmp: 'EMPs usados',
   playAgain: 'Jogar de novo',
   toMenu: 'Menu',
+  reportCoins: 'Moedas ganhas',
+  reportCoinsScore: '{n} pela pontuação',
+  reportCoinsGrade: '+{n} pela nota {grade}',
+  reportCoinsMode: '×{pct}% no modo {mode}',
+  reportBalance: 'Saldo: {n}',
+
+  // Shop and inventory
+  shopTitle: 'Loja',
+  shopTabToday: 'Loja do dia',
+  shopTabInventory: 'Inventário',
+  shopRotation: 'Nova seleção em {time}',
+  shopDeal: 'Oferta do dia',
+  shopBuy: 'Comprar · {price}',
+  shopConfirm: 'Confirmar · {price}',
+  shopConfirmHint: 'Clique de novo para confirmar a compra.',
+  shopEquip: 'Equipar',
+  shopEquipped: 'Equipado',
+  shopOwned: 'Adquirido',
+  shopDefault: 'Padrão',
+  shopLocked: 'Bloqueado',
+  shopInShop: 'Na loja hoje',
+  shopMissing: 'Faltam {n} moedas',
+  shopUnavailable: 'Fora da loja hoje',
+  shopUnavailableHint: 'Itens bloqueados entram na loja do dia em rodízio.',
+  shopBought: 'Comprado: {item}. Já pode equipar.',
+  shopEquippedNow: 'Equipado: {item}.',
+  shopChanged: 'A loja mudou. Confira as novas ofertas.',
+  shopPreview: 'Prévia ao vivo',
+  shopFree: 'Grátis',
+  typeCannon: 'Canhão',
+  typeTheme: 'Tema',
+  typeLaserColor: 'Cor do laser',
+  typeExplosion: 'Explosão',
+  typeWordBorder: 'Borda das palavras',
+  rarityCommon: 'Comum',
+  rarityRare: 'Raro',
+  rarityEpic: 'Épico',
+  rarityLegendary: 'Lendário',
 
   canvasLabel: 'Campo de batalha: palavras caindo em direção ao perímetro',
 } as const;
@@ -92,6 +133,8 @@ const EN: Readonly<Record<StringKey, string>> = {
   menuLanguage: 'Language',
   play: 'Play',
   settings: 'Settings',
+  shop: 'Shop',
+  coins: 'Coins',
   modeSurvival: 'Survival',
   modeSurvivalDesc: 'Endless. Hold on until the shield falls.',
   modeTimeAttack: 'Time Attack',
@@ -152,6 +195,43 @@ const EN: Readonly<Record<StringKey, string>> = {
   statEmp: 'EMPs used',
   playAgain: 'Play again',
   toMenu: 'Menu',
+  reportCoins: 'Coins earned',
+  reportCoinsScore: '{n} for the score',
+  reportCoinsGrade: '+{n} for grade {grade}',
+  reportCoinsMode: '×{pct}% in {mode} mode',
+  reportBalance: 'Balance: {n}',
+
+  shopTitle: 'Shop',
+  shopTabToday: "Today's shop",
+  shopTabInventory: 'Inventory',
+  shopRotation: 'New selection in {time}',
+  shopDeal: 'Deal of the day',
+  shopBuy: 'Buy · {price}',
+  shopConfirm: 'Confirm · {price}',
+  shopConfirmHint: 'Click again to confirm the purchase.',
+  shopEquip: 'Equip',
+  shopEquipped: 'Equipped',
+  shopOwned: 'Owned',
+  shopDefault: 'Default',
+  shopLocked: 'Locked',
+  shopInShop: 'In the shop today',
+  shopMissing: '{n} more coins needed',
+  shopUnavailable: 'Not in the shop today',
+  shopUnavailableHint: "Locked items rotate through today's shop.",
+  shopBought: 'Bought: {item}. Ready to equip.',
+  shopEquippedNow: 'Equipped: {item}.',
+  shopChanged: 'The shop changed. Check the new offers.',
+  shopPreview: 'Live preview',
+  shopFree: 'Free',
+  typeCannon: 'Cannon',
+  typeTheme: 'Theme',
+  typeLaserColor: 'Laser color',
+  typeExplosion: 'Explosion',
+  typeWordBorder: 'Word border',
+  rarityCommon: 'Common',
+  rarityRare: 'Rare',
+  rarityEpic: 'Epic',
+  rarityLegendary: 'Legendary',
 
   canvasLabel: 'Battlefield: words falling toward the perimeter',
 };
@@ -177,6 +257,21 @@ export const DIFFICULTY_LABEL: Readonly<Record<GameDifficulty, StringKey>> = {
   easy: 'difficultyEasy',
   normal: 'difficultyNormal',
   hard: 'difficultyHard',
+};
+
+export const TYPE_LABEL: Readonly<Record<CosmeticType, StringKey>> = {
+  cannon: 'typeCannon',
+  theme: 'typeTheme',
+  laserColor: 'typeLaserColor',
+  explosion: 'typeExplosion',
+  wordBorder: 'typeWordBorder',
+};
+
+export const RARITY_LABEL: Readonly<Record<Rarity, StringKey>> = {
+  common: 'rarityCommon',
+  rare: 'rarityRare',
+  epic: 'rarityEpic',
+  legendary: 'rarityLegendary',
 };
 
 /** Language names are shown in their own language, whatever the interface language. */

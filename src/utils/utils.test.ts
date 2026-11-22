@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { createIntegerFormatter, formatPercent, formatTime } from './format.ts';
+import { createIntegerFormatter, formatCountdown, formatPercent, formatTime } from './format.ts';
 import { aimAngle, clamp, lerp } from './math.ts';
 
 describe('math', () => {
@@ -37,5 +37,15 @@ describe('format', () => {
     expect(formatPercent(0.934)).toBe('93%');
     expect(formatPercent(1)).toBe('100%');
     expect(formatPercent(0)).toBe('0%');
+  });
+});
+
+describe('formatCountdown', () => {
+  it('formats milliseconds as h:mm:ss, rounding up to the second', () => {
+    expect(formatCountdown(0)).toBe('0:00:00');
+    expect(formatCountdown(999)).toBe('0:00:01');
+    expect(formatCountdown((5 * 3600 + 3 * 60 + 9) * 1000)).toBe('5:03:09');
+    expect(formatCountdown(24 * 3600 * 1000)).toBe('24:00:00');
+    expect(formatCountdown(-5)).toBe('0:00:00');
   });
 });

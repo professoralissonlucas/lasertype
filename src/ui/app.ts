@@ -1,6 +1,11 @@
-// Screen switching: menu ↔ settings ↔ match (HUD, pause, Mission Report).
-// Owns the persisted settings and applies them (volume, effects, language).
+// Screen switching: menu ↔ settings ↔ shop ↔ match (HUD, pause, Mission Report).
+// Owns the persisted settings and the economy, and applies them (volume, effects,
+// language, equipped cosmetics).
 import type { AudioEngine } from '../audio/AudioEngine.ts';
+import { resolveCosmetics } from '../cosmetics/equip.ts';
+import type { ResolvedCosmetics } from '../cosmetics/types.ts';
+import { Economy } from '../economy/Economy.ts';
+import { localInventoryRepository } from '../economy/repository.ts';
 import { Game, type GameView, type MatchConfig } from '../game/Game.ts';
 import { buildReport } from '../game/report.ts';
 import type { MatchState } from '../game/state.ts';
@@ -15,6 +20,7 @@ import { MenuScreen, type MenuChoice } from './menu.ts';
 import { PauseScreen } from './pause.ts';
 import { ReportScreen } from './report.ts';
 import { SettingsScreen } from './settings.ts';
+import { ShopScreen } from './shop.ts';
 
 export interface AppOptions {
   readonly root: HTMLElement;
@@ -25,7 +31,7 @@ export interface AppOptions {
   readonly seed: string | null;
 }
 
-type Screen = 'menu' | 'settings' | 'match';
+type Screen = 'menu' | 'settings' | 'shop' | 'match';
 
 interface Screens {
   readonly hud: Hud;
@@ -33,6 +39,7 @@ interface Screens {
   readonly report: ReportScreen;
   readonly menu: MenuScreen;
   readonly settings: SettingsScreen;
+  readonly shop: ShopScreen;
 }
 
 export class App {
@@ -42,6 +49,7 @@ export class App {
   private readonly canvas: HTMLCanvasElement;
   private readonly layer: HTMLElement;
   private readonly gameInstance: Game;
+  private readonly economyInstance: Economy;
   private settings: Settings;
   private screens: Screens;
   private screen: Screen = 'menu';
@@ -59,6 +67,12 @@ export class App {
     options.root.replaceChildren(this.canvas, this.layer);
 
     this.gameInstance = new Game(this.canvas, this.view, this.audio);
+    this.economyInstance = new Economy(localInventoryRepository(options.store));
+    this.gameInstance.setCosmetics(this.cosmetics());
+    this.economyInstance.subscribe((inventory, change) => {
+      if (change.type === 'equip') this.gameInstance.setCosmetics(this.cosmetics());
+      this.screens.menu.setCoins(inventory.coins);
+    });
     this.screens = this.buildScreens();
     this.applySettings();
   }
@@ -66,6 +80,17 @@ export class App {
   /** The running game (dev console / end-to-end checks). */
   get game(): Game {
     return this.gameInstance;
+  }
+
+  /** Coins, inventory and shop (dev console / end-to-end checks). */
+  get economy(): Economy {
+    return this.economyInstance;
+  }
+
+  /** What the player has equipped, resolved for the renderers. */
+  private cosmetics(): ResolvedCosmetics {
+    const economy = this.economyInstance;
+    return resolveCosmetics(economy.inventory.equipped, (id) => economy.owns(id));
   }
 
   start(): void {
@@ -93,7 +118,10 @@ export class App {
     pause.setVisible(state.status === 'paused');
     if (state.status === 'gameover') {
       if (!this.reportShown) {
-        report.show(buildReport(state));
+        // Once per match: credit the coins, then show them on the report.
+        const summary = buildReport(state);
+        const reward = this.economyInstance.rewardMatch(summary);
+        report.show(summary, reward, this.economyInstance.coins);
         this.reportShown = true;
       }
     } else if (this.reportShown) {
@@ -106,9 +134,10 @@ export class App {
 
   private show(screen: Screen): void {
     this.screen = screen;
-    const { hud, pause, report, menu, settings } = this.screens;
+    const { hud, pause, report, menu, settings, shop } = this.screens;
     menu.setVisible(screen === 'menu');
     settings.setVisible(screen === 'settings');
+    shop.setVisible(screen === 'shop');
     hud.setVisible(screen === 'match');
     if (screen !== 'match') {
       pause.setVisible(false);
@@ -117,6 +146,7 @@ export class App {
     }
     if (screen === 'menu') menu.focus();
     if (screen === 'settings') settings.focus();
+    if (screen === 'shop') shop.focus();
   }
 
   private startMatch(): void {
@@ -154,6 +184,7 @@ export class App {
     const s = this.settings;
     this.audio.setVolume(s.sfxVolume);
     this.gameInstance.setIdleReducedEffects(s.reduceEffects);
+    this.screens.shop.setReducedEffects(s.reduceEffects);
     document.documentElement.lang = s.language;
   }
 
@@ -180,17 +211,28 @@ export class App {
         onPlayAgain: () => this.gameInstance.restart(),
         onMenu: () => this.toMenu(),
       }),
-      menu: new MenuScreen(t, this.menuChoice(), {
+      menu: new MenuScreen(t, formatScore, this.menuChoice(), this.economyInstance.coins, {
         onPlay: (choice) => {
           this.updateSettings({ ...this.settings, ...choice });
           this.startMatch();
         },
         onChange: (choice) => this.updateSettings({ ...this.settings, ...choice }),
         onSettings: () => this.show('settings'),
+        onShop: () => this.show('shop'),
       }),
       settings: new SettingsScreen(t, this.settings, {
         onChange: (next) => this.updateSettings(next),
         onVolumePreview: () => this.audio.play('shot'),
+        onBack: () => this.show('menu'),
+      }),
+      shop: new ShopScreen({
+        t,
+        language: this.settings.language,
+        formatNumber: formatScore,
+        economy: this.economyInstance,
+        sound: this.audio,
+        reduceEffects: this.settings.reduceEffects,
+        equipped: () => this.cosmetics(),
         onBack: () => this.show('menu'),
       }),
     };
@@ -200,6 +242,7 @@ export class App {
       screens.report.root,
       screens.menu.root,
       screens.settings.root,
+      screens.shop.root,
     );
     return screens;
   }
@@ -209,6 +252,7 @@ export class App {
     // Detach the old screens' keyboard listeners (menu Enter, settings Esc).
     this.screens.menu.setVisible(false);
     this.screens.settings.setVisible(false);
+    this.screens.shop.setVisible(false);
     this.screens = this.buildScreens();
     this.show(this.screen);
     if (this.screen === 'menu') this.screens.menu.focusGroup('language');

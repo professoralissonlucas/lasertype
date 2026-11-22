@@ -1,5 +1,8 @@
 // Particle recipes for each game moment. Pure: they only fill the pool.
 // `scale` multiplies particle counts (0.5 with "Reduzir efeitos").
+// Cosmetic colors use the slots 'laser', 'blast' and 'blastAlt' (resolved by the renderer).
+import { DEFAULT_COSMETICS } from '../../cosmetics/equip.ts';
+import type { ExplosionParams } from '../../cosmetics/types.ts';
 import type { Rng } from '../../utils/rng.ts';
 import type { FxColor, ParticlePool } from './particles.ts';
 
@@ -19,7 +22,7 @@ export function emitImpact(
   scale: number,
 ): void {
   for (let i = 0, n = count(7, scale); i < n; i++) {
-    const p = pool.spawn('spark', rng.next() < 0.3 ? 'text' : 'primary', x, y, rng.range(0.12, 0.28));
+    const p = pool.spawn('spark', rng.next() < 0.3 ? 'text' : 'laser', x, y, rng.range(0.12, 0.28));
     if (!p) return;
     // Sparks keep travelling roughly the way the beam was going.
     const dir = aim + rng.range(-0.85, 0.85);
@@ -31,13 +34,13 @@ export function emitImpact(
     p.sizeEnd = 0.5;
   }
 
-  const glow = pool.spawn('glow', 'primary', x, y, 0.16);
+  const glow = pool.spawn('glow', 'laser', x, y, 0.16);
   if (glow) {
     glow.size = 14;
     glow.sizeEnd = 2;
   }
 
-  const ring = pool.spawn('ring', 'primary', x, y, 0.18);
+  const ring = pool.spawn('ring', 'laser', x, y, 0.18);
   if (ring) {
     ring.size = 3;
     ring.sizeEnd = 16;
@@ -75,8 +78,76 @@ export function emitGlyphs(
   }
 }
 
+/** Letters crumbling into pixels where they were drawn (the "dissolve" explosion). */
+function emitDissolve(
+  pool: ParticlePool,
+  rng: Rng,
+  text: string,
+  startX: number,
+  charWidth: number,
+  y: number,
+  scale: number,
+  gravity: number,
+): void {
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === undefined) continue;
+    const x = startX + (i + 0.5) * charWidth;
+    // The letter flashes in place for an instant…
+    const glyph = pool.spawn('glyph', 'text', x, y, 0.2);
+    if (!glyph) return;
+    glyph.glyph = char;
+    glyph.size = 1;
+    glyph.sizeEnd = 1.15;
+    // …and breaks into a few pixels that drift away.
+    for (let k = 0, n = count(4, scale); k < n; k++) {
+      const p = pool.spawn(
+        'square',
+        rng.next() < 0.5 ? 'text' : 'blast',
+        x + rng.range(-0.4, 0.4) * charWidth,
+        y + rng.range(-0.5, 0.5) * charWidth,
+        rng.range(0.5, 0.95),
+      );
+      if (!p) return;
+      p.vx = rng.range(-30, 30);
+      p.vy = rng.range(-50, -10);
+      p.drag = 1.5;
+      p.gravity = 120 * gravity;
+      p.size = rng.range(2.5, 4);
+      p.sizeEnd = 0.5;
+    }
+  }
+}
+
+/** Letters sucked into the middle of the word (the "collapse" explosion). */
+function emitCollapse(
+  pool: ParticlePool,
+  rng: Rng,
+  text: string,
+  startX: number,
+  charWidth: number,
+  y: number,
+): void {
+  const cx = startX + (text.length * charWidth) / 2;
+  for (let i = 0; i < text.length; i++) {
+    const char = text[i];
+    if (char === undefined) continue;
+    const x = startX + (i + 0.5) * charWidth;
+    const life = rng.range(0.22, 0.3);
+    const p = pool.spawn('glyph', 'text', x, y, life);
+    if (!p) return;
+    p.glyph = char;
+    // Reaches the center as it vanishes.
+    p.vx = (cx - x) / life;
+    p.spin = rng.range(-4, 4);
+    p.size = 1;
+    p.sizeEnd = 0.2;
+  }
+}
+
 /**
- * A destroyed word: its letters fly apart, plus sparks, embers and a shockwave.
+ * A destroyed word, drawn the way the equipped explosion says: its letters fly apart
+ * (or crumble, or collapse), plus debris, embers and shockwaves.
  * `startX` is the left edge of the text, `y` its vertical center.
  */
 export function emitExplosion(
@@ -87,27 +158,53 @@ export function emitExplosion(
   charWidth: number,
   y: number,
   scale: number,
+  style: ExplosionParams = DEFAULT_COSMETICS.explosion,
 ): void {
   const width = text.length * charWidth;
   const cx = startX + width / 2;
 
-  emitGlyphs(pool, rng, text, startX, charWidth, y, 'text');
+  switch (style.letters) {
+    case 'scatter':
+      emitGlyphs(pool, rng, text, startX, charWidth, y, 'text');
+      break;
+    case 'dissolve':
+      emitDissolve(pool, rng, text, startX, charWidth, y, scale, style.gravity);
+      break;
+    case 'collapse':
+      emitCollapse(pool, rng, text, startX, charWidth, y);
+      break;
+  }
 
-  for (let i = 0, n = count(16 + text.length * 2, scale); i < n; i++) {
-    const p = pool.spawn('spark', rng.next() < 0.3 ? 'text' : 'primary', cx, y, rng.range(0.3, 0.7));
+  const square = style.debris === 'square';
+  for (let i = 0, n = count((16 + text.length * 2) * style.debrisCount, scale); i < n; i++) {
+    const color: FxColor = rng.next() < 0.3 ? 'text' : 'blast';
+    if (style.inward) {
+      // Debris starts on a circle around the word and converges on its center.
+      const life = rng.range(0.2, 0.32);
+      const dir = rng.range(0, TAU);
+      const radius = (rng.range(50, 110) + width * 0.4) * style.debrisSpeed;
+      const p = pool.spawn(square ? 'square' : 'spark', color, cx + Math.sin(dir) * radius, y - Math.cos(dir) * radius, life);
+      if (!p) break;
+      p.vx = (-Math.sin(dir) * radius) / life;
+      p.vy = (Math.cos(dir) * radius) / life;
+      p.size = rng.range(1.2, 2.4);
+      p.sizeEnd = 0.6;
+      continue;
+    }
+    const p = pool.spawn(square ? 'square' : 'spark', color, cx, y, rng.range(0.3, 0.7));
     if (!p) break;
     const dir = rng.range(0, TAU);
-    const speed = rng.range(120, 460);
+    const speed = rng.range(120, 460) * style.debrisSpeed;
     p.vx = Math.sin(dir) * speed;
     p.vy = -Math.cos(dir) * speed;
     p.drag = 3.5;
-    p.gravity = 120;
-    p.size = rng.range(1.2, 2.6);
-    p.sizeEnd = 0.4;
+    p.gravity = 120 * style.gravity;
+    p.size = square ? rng.range(2, 4) : rng.range(1.2, 2.6);
+    p.sizeEnd = square ? 0.8 : 0.4;
   }
 
-  for (let i = 0, n = count(8, scale); i < n; i++) {
-    const p = pool.spawn('glow', rng.next() < 0.3 ? 'combo' : 'primary', cx, y, rng.range(0.5, 0.9));
+  for (let i = 0, n = count(8 * style.embers, scale); i < n; i++) {
+    const p = pool.spawn('glow', rng.next() < 0.3 ? 'blastAlt' : 'blast', cx, y, rng.range(0.5, 0.9));
     if (!p) break;
     const dir = rng.range(0, TAU);
     const speed = rng.range(30, 140);
@@ -118,10 +215,18 @@ export function emitExplosion(
     p.sizeEnd = 0;
   }
 
-  const ring = pool.spawn('ring', 'primary', cx, y, 0.35);
-  if (ring) {
-    ring.size = 4;
-    ring.sizeEnd = 28 + width * 0.35;
+  const reach = (28 + width * 0.35) * style.ringScale;
+  for (let i = 0; i < style.rings; i++) {
+    const ring = pool.spawn('ring', i === 0 ? 'blast' : 'blastAlt', cx, y, 0.35 + i * 0.12);
+    if (!ring) break;
+    if (style.inward && i === 0) {
+      // Implosion: the first ring closes in on the word, the next ones burst out.
+      ring.size = reach * 1.4;
+      ring.sizeEnd = 2;
+    } else {
+      ring.size = 4;
+      ring.sizeEnd = reach * (1 + i * 0.45);
+    }
   }
 }
 

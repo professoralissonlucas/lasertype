@@ -45,6 +45,18 @@ export function createRng(seed: number | string): Rng {
   };
 }
 
+/** A shuffled copy of `items` (Fisher–Yates driven by `rng`; the input is not changed). */
+export function shuffled<T>(rng: Rng, items: readonly T[]): T[] {
+  const out = items.slice();
+  for (let i = out.length - 1; i > 0; i--) {
+    const j = rng.int(0, i);
+    const a = out[i] as T;
+    out[i] = out[j] as T;
+    out[j] = a;
+  }
+  return out;
+}
+
 /**
  * Picks a key with probability proportional to its weight. `keys` fixes the iteration
  * order so results never depend on object key order. Non-positive weights are never picked.

@@ -1,4 +1,6 @@
 // Visual effects state: particles, screen shake, flash, perimeter pulse. No DOM/canvas.
+import { DEFAULT_COSMETICS } from '../../cosmetics/equip.ts';
+import type { ExplosionParams } from '../../cosmetics/types.ts';
 import { createRng, type Rng } from '../../utils/rng.ts';
 import {
   emitArmorBreak,
@@ -39,13 +41,16 @@ export class Effects {
   perimeterPulse = 0;
   /** With "Reduzir efeitos": no shake, no flash, half the particles. */
   readonly reduced: boolean;
+  /** Equipped explosion cosmetic (visual only). */
+  explosionStyle: ExplosionParams;
   private readonly rng: Rng;
   private readonly scale: number;
 
-  constructor(reduced: boolean, seed: string = 'fx') {
+  constructor(reduced: boolean, seed: string = 'fx', explosionStyle: ExplosionParams = DEFAULT_COSMETICS.explosion) {
     this.reduced = reduced;
     this.scale = reduced ? REDUCED_PARTICLE_SCALE : 1;
     this.rng = createRng(seed);
+    this.explosionStyle = explosionStyle;
   }
 
   /** A laser reached a letter at (x, y), travelling at angle `aim`. */
@@ -66,6 +71,7 @@ export class Effects {
       charWidth,
       y,
       this.scale * (area ? AREA_KILL_SCALE : 1),
+      this.explosionStyle,
     );
     if (area) return;
     this.kick(DESTROY_TRAUMA, 'text', DESTROY_FLASH);

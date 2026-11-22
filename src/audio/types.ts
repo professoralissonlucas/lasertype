@@ -16,7 +16,9 @@ export type SoundName =
   | 'emp'
   | 'empReady'
   | 'multiplier'
-  | 'wave';
+  | 'wave'
+  | 'purchase'
+  | 'equip';
 
 /** Attack-then-exponential-release volume envelope. Times in seconds. */
 export interface Envelope {

@@ -1,5 +1,6 @@
 // Mission Report: grade S–D, score and statistics at the end of a match.
 // Keyboard (via the game input): Enter/Tab play again, Esc goes to the menu.
+import type { MatchReward } from '../economy/types.ts';
 import type { MatchReport } from '../game/report.ts';
 import type { EndReason } from '../game/types.ts';
 import { formatPercent, formatTime } from '../utils/format.ts';
@@ -40,6 +41,9 @@ export class ReportScreen {
   private readonly subtitle: HTMLElement;
   private readonly gradeValue: HTMLElement;
   private readonly scoreValue: HTMLElement;
+  private readonly coinsValue: HTMLElement;
+  private readonly coinsDetail: HTMLElement;
+  private readonly balance: HTMLElement;
   private readonly stats: Record<StatKey, HTMLElement>;
 
   constructor(t: Translate, formatScore: (value: number) => string, callbacks: ReportCallbacks) {
@@ -63,6 +67,19 @@ export class ReportScreen {
     this.scoreValue = el('span', 'report__score-value', '0');
     score.append(el('span', 'report__caption', t('statScore')), this.scoreValue);
     summary.append(grade, score);
+
+    // Coins earned, with how they were computed, and the new balance.
+    const coins = el('div', 'report__coins');
+    const earned = el('div', 'report__coins-earned');
+    this.coinsValue = el('span', 'coins__value', '+0');
+    const amount = el('span', 'coins coins--large');
+    amount.append(el('span', 'coin'), this.coinsValue);
+    earned.append(el('span', 'report__caption', t('reportCoins')), amount);
+    const info = el('div', 'report__coins-info');
+    this.coinsDetail = el('span', 'report__coins-detail');
+    this.balance = el('span', 'report__balance');
+    info.append(this.coinsDetail, this.balance);
+    coins.append(earned, info);
 
     const list = el('dl', 'report__stats');
     const row = (key: StatKey): HTMLElement => {
@@ -92,12 +109,22 @@ export class ReportScreen {
       button('btn', t('toMenu'), () => callbacks.onMenu(), 'Esc'),
     );
 
-    panel.append(title, this.subtitle, summary, list, actions);
+    panel.append(title, this.subtitle, summary, coins, list, actions);
     this.root.append(panel);
   }
 
-  show(report: MatchReport): void {
+  /** `reward` = coins this match earned; `balance` = coins after crediting them. */
+  show(report: MatchReport, reward: MatchReward, balance: number): void {
     const t = this.t;
+    this.coinsValue.textContent = `+${this.formatScore(reward.total)}`;
+    const parts = [t('reportCoinsScore', { n: reward.fromScore })];
+    if (reward.gradeBonus > 0) parts.push(t('reportCoinsGrade', { n: reward.gradeBonus, grade: GRADE_LABEL[report.grade] }));
+    if (reward.factor !== 1) {
+      parts.push(t('reportCoinsMode', { pct: Math.round(reward.factor * 100), mode: t(MODE_LABEL[report.mode]) }));
+    }
+    this.coinsDetail.textContent = parts.join(' · ');
+    this.balance.textContent = t('reportBalance', { n: this.formatScore(balance) });
+
     this.subtitle.textContent = `${t(END_TITLE[report.endReason])} · ${t(MODE_LABEL[report.mode])} · ${t(DIFFICULTY_LABEL[report.difficulty])}`;
     this.gradeValue.textContent = GRADE_LABEL[report.grade];
     this.gradeValue.dataset.grade = report.grade;

@@ -147,4 +147,25 @@ export const DEFAULT_SOUNDS: SoundPack = {
       { kind: 'tone', wave: 'sine', freq: 110, attack: 0.02, duration: 0.65, gain: 0.12, delay: 0.4 },
     ],
   },
+
+  // Shop purchase: bright coin chime (two quick high notes with a shimmer).
+  purchase: {
+    pitchJitter: 0,
+    cooldown: 0.2,
+    layers: [
+      { kind: 'tone', wave: 'triangle', freq: 988, attack: 0.003, duration: 0.1, gain: 0.1 },
+      { kind: 'tone', wave: 'triangle', freq: 1319, attack: 0.003, duration: 0.32, gain: 0.11, delay: 0.08 },
+      { kind: 'tone', wave: 'sine', freq: 2637, attack: 0.003, duration: 0.2, gain: 0.03, delay: 0.08 },
+    ],
+  },
+
+  // Cosmetic equipped: short rising click.
+  equip: {
+    pitchJitter: 0,
+    cooldown: 0.08,
+    layers: [
+      { kind: 'tone', wave: 'sine', freq: 520, freqEnd: 820, attack: 0.002, duration: 0.09, gain: 0.08 },
+      { kind: 'noise', filter: 'highpass', cutoff: 4000, attack: 0.001, duration: 0.03, gain: 0.04 },
+    ],
+  },
 };

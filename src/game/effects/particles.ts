@@ -1,16 +1,21 @@
 // Particle pool and physics (pure: no DOM/canvas). Coordinates are screen CSS pixels.
 import { FixedPool } from '../../utils/pool.ts';
 
-/** Palette keys particles may use (resolved to colors by the renderer). */
-export type FxColor = 'primary' | 'text' | 'combo' | 'danger';
+/**
+ * Color slots particles may use, resolved to colors by the renderer: the four UI palette
+ * colors plus the cosmetic ones (equipped laser color and explosion colors).
+ */
+export const FX_COLORS = ['primary', 'text', 'combo', 'danger', 'laser', 'blast', 'blastAlt'] as const;
+export type FxColor = (typeof FX_COLORS)[number];
 
 /**
  * - spark: short streak along its velocity (`size` = line width)
  * - glow: soft additive blob (`size` = radius)
  * - ring: expanding shockwave (`size` = radius)
  * - glyph: a letter flying away from a destroyed word (`size` = scale)
+ * - square: a pixel of debris (`size` = side)
  */
-export type ParticleKind = 'spark' | 'glow' | 'ring' | 'glyph';
+export type ParticleKind = 'spark' | 'glow' | 'ring' | 'glyph' | 'square';
 
 export interface Particle {
   active: boolean;

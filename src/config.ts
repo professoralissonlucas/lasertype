@@ -1,4 +1,5 @@
 // Balancing constants. Every gameplay number lives here, never inline.
+import type { EconomyConfig } from './economy/types.ts';
 import type {
   ComboConfig,
   DifficultyPreset,
@@ -104,6 +105,21 @@ const GRADING: GradingConfig = {
   ],
 };
 
+/**
+ * Coins per match: min(floor(points / 100), 80) + grade bonus, × the mode factor (Zen 25%).
+ * Prices by rarity; the daily shop has 4 items, one of them 30% off.
+ */
+const ECONOMY: EconomyConfig = {
+  pointsPerCoin: 100,
+  maxScoreCoins: 80,
+  gradeBonus: { S: 20, A: 10, B: 5, C: 0, D: 0 },
+  modeFactor: { survival: 1, timeAttack: 1, zen: 0.25 },
+  rarityPrice: { common: 300, rare: 900, epic: 2500, legendary: 6000 },
+  shopSize: 4,
+  discountFactor: 0.7,
+  discountStep: 10,
+};
+
 const DEFAULT_LANGUAGE: Language = 'pt-BR';
 
 export const CONFIG = {
@@ -123,4 +139,5 @@ export const CONFIG = {
   scoring: SCORING,
   difficulty: DIFFICULTY,
   grading: GRADING,
+  economy: ECONOMY,
 } as const;
