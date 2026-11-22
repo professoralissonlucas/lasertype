@@ -9,7 +9,8 @@
     "preview": "vite preview",
     "test": "vitest run",
     "typecheck": "tsc --noEmit && tsc --noEmit -p scripts",
-    "seed:shop": "node scripts/seed-shop.ts"
+    "seed:shop": "node scripts/seed-shop.ts",
+    "share:images": "node scripts/share-images.ts"
   },
   "devDependencies": {
     "firebase-admin": "^14.5.1",

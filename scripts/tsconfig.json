@@ -1,8 +1,9 @@
 {
-  // Node scripts (firebase-admin): Node types on top of the app's settings.
+  // Node scripts (firebase-admin, Vite), plus vite.config.ts and the share-image page
+  // (share/scene.ts runs in the browser through Vite, hence vite/client).
   "extends": "../tsconfig.json",
   "compilerOptions": {
-    "types": ["node"]
+    "types": ["node", "vite/client"]
   },
-  "include": ["."]
+  "include": [".", "../vite.config.ts"]
 }

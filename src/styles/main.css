@@ -302,6 +302,31 @@ kbd {
   letter-spacing: 0.12em;
 }
 
+/* reCAPTCHA credit (only when App Check runs): bottom-right, clear of the cannon. */
+.menu__legal {
+  position: absolute;
+  right: 16px;
+  bottom: 10px;
+  margin: 0;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 11px;
+}
+
+.menu__legal a {
+  color: inherit;
+  text-underline-offset: 2px;
+}
+
+.menu__legal a:hover {
+  color: var(--text);
+}
+
+.menu__legal a:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
 .menu__form {
   display: flex;
   flex-direction: column;
@@ -1706,6 +1731,11 @@ kbd {
   .menu__account {
     position: static;
     align-self: center;
+  }
+
+  .menu__legal {
+    position: static;
+    text-align: center;
   }
 
   .ranking__filters {

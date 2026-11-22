@@ -46,6 +46,8 @@ export interface AppOptions {
   readonly inventory: InventoryRepository;
   /** users/{uid} sync (nickname, account switch); null in offline builds. */
   readonly cloud: FirestoreInventoryRepository | null;
+  /** App Check runs on reCAPTCHA v3: the menu credits it (its badge stays hidden). */
+  readonly recaptchaNotice: boolean;
 }
 
 type Screen = 'menu' | 'settings' | 'shop' | 'ranking' | 'match';
@@ -80,6 +82,7 @@ export class App {
   private readonly authService: AuthService;
   private readonly leaderboardService: Leaderboard;
   private readonly cloudSync: FirestoreInventoryRepository | null;
+  private readonly recaptchaNotice: boolean;
   private readonly toasts = new Toasts();
   private settings: Settings;
   private t: Translate;
@@ -100,6 +103,7 @@ export class App {
     this.authService = options.auth;
     this.leaderboardService = options.leaderboard;
     this.cloudSync = options.cloud;
+    this.recaptchaNotice = options.recaptchaNotice;
     this.matchLang = options.settings.language;
     this.t = createTranslator(this.settings.language);
     this.formatScore = createIntegerFormatter(this.settings.language);
@@ -458,7 +462,7 @@ export class App {
         onMenu: () => this.toMenu(),
         onSignIn: this.signIn,
       }),
-      menu: new MenuScreen(t, formatScore, this.menuChoice(), this.economyInstance.coins, menuAccount.root, {
+      menu: new MenuScreen(t, formatScore, this.menuChoice(), this.economyInstance.coins, menuAccount.root, this.recaptchaNotice, {
         onPlay: (choice) => {
           this.updateSettings({ ...this.settings, ...choice });
           this.startMatch();

@@ -3,7 +3,7 @@
 import { GAME_DIFFICULTIES, type GameDifficulty } from '../game/types.ts';
 import { MODE_IDS, type ModeId } from '../modes/types.ts';
 import { LANGUAGES, type Language } from '../words/types.ts';
-import { button, el, radioGroup } from './dom.ts';
+import { button, el, externalLink, radioGroup } from './dom.ts';
 import { DIFFICULTY_LABEL, LANGUAGE_NAME, MODE_DESCRIPTION, MODE_LABEL, type Translate } from './i18n.ts';
 
 export interface MenuChoice {
@@ -18,6 +18,19 @@ export interface MenuCallbacks {
   onSettings(): void;
   onShop(): void;
   onRanking(): void;
+}
+
+const GOOGLE_PRIVACY = 'https://policies.google.com/privacy';
+const GOOGLE_TERMS = 'https://policies.google.com/terms';
+
+/**
+ * App Check renders reCAPTCHA without its badge; Google then asks for this credit in the
+ * page: "protected by reCAPTCHA" plus links to its Privacy Policy and Terms of Service.
+ */
+function recaptchaCredit(t: Translate): HTMLElement {
+  const note = el('p', 'menu__legal', `${t('recaptchaCredit')} `);
+  note.append(externalLink(GOOGLE_PRIVACY, t('recaptchaPrivacy')), ' · ', externalLink(GOOGLE_TERMS, t('recaptchaTerms')));
+  return note;
 }
 
 export class MenuScreen {
@@ -36,6 +49,7 @@ export class MenuScreen {
     initial: MenuChoice,
     coins: number,
     account: HTMLElement,
+    recaptchaNotice: boolean,
     callbacks: MenuCallbacks,
   ) {
     this.t = t;
@@ -109,6 +123,7 @@ export class MenuScreen {
     });
 
     this.root.append(account, this.wallet, header, form);
+    if (recaptchaNotice) this.root.append(recaptchaCredit(t));
   }
 
   setCoins(coins: number): void {

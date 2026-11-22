@@ -3,11 +3,167 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Laser Type</title>
-    <link rel="icon" href="data:," />
+    <title>Laser Type — jogo de digitação arcade</title>
+    <meta
+      name="description"
+      content="Palavras caem do céu e cada letra certa é um disparo do canhão a laser. Jogo de digitação arcade grátis, no navegador, em português e inglês."
+    />
+    <meta name="theme-color" content="#05070F" />
+    <meta name="color-scheme" content="dark" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+
+    <!-- Share preview (WhatsApp, social networks). The build makes og:url and the image
+         URLs absolute (vite.config.ts); public/og-image.jpg comes from `npm run share:images`. -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="Laser Type" />
+    <meta property="og:locale" content="pt_BR" />
+    <meta property="og:locale:alternate" content="en_US" />
+    <meta property="og:title" content="Laser Type — jogo de digitação arcade" />
+    <meta
+      property="og:description"
+      content="Palavras caem do céu e cada letra certa é um disparo do canhão a laser. Defenda a estação!"
+    />
+    <meta property="og:url" content="%BASE_URL%" />
+    <meta property="og:image" content="/og-image.jpg" />
+    <meta property="og:image:type" content="image/jpeg" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Canhão a laser disparando contra palavras que caem num céu estrelado, sob o título Laser Type."
+    />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:image" content="/og-image.jpg" />
+
+    <!-- Fallback notice (no JavaScript, unsupported browser, failed start): its CSS is a
+         public file so the build leaves it untouched for old browsers. -->
+    <link rel="stylesheet" href="/boot.css" />
   </head>
   <body>
     <div id="app"></div>
+
+    <noscript>
+      <div class="boot boot--static">
+        <div class="boot__panel">
+          <p class="boot__brand">Laser Type</p>
+          <h1 class="boot__title">Ative o JavaScript</h1>
+          <p class="boot__text">
+            O Laser Type roda no navegador e precisa de JavaScript. Ative-o nas configurações do navegador e
+            recarregue a página.
+          </p>
+          <p class="boot__text" lang="en">
+            Laser Type needs JavaScript: turn it on in your browser settings and reload the page.
+          </p>
+        </div>
+      </div>
+    </noscript>
+
+    <div id="boot-notice" class="boot" role="alert">
+      <div class="boot__panel">
+        <p class="boot__brand">Laser Type</p>
+        <h1 class="boot__title" id="boot-title"></h1>
+        <p class="boot__text" id="boot-text"></p>
+        <button class="boot__reload" id="boot-reload" type="button"></button>
+      </div>
+    </div>
+
+    <!-- Boot guard (classic ES5 script: it has to run where the game cannot). It shows the
+         notice when the browser lacks what the game uses (data-boot="unsupported": the game
+         does not start) or when an error stops the start before src/main.ts marks
+         <html data-boot="ready"> (data-boot="failed"). -->
+    <script>
+      (function () {
+        var html = document.documentElement;
+        var TEXT = {
+          'pt-BR': {
+            unsupported: [
+              'Navegador sem suporte',
+              'O Laser Type precisa de um navegador atualizado. Use a versão mais recente do Chrome, Edge, Firefox ou Safari.',
+            ],
+            failed: [
+              'Não foi possível iniciar',
+              'Algo impediu o jogo de carregar. Recarregue a página; se continuar, atualize o navegador (Chrome, Edge, Firefox ou Safari recentes).',
+            ],
+            reload: 'Recarregar',
+          },
+          en: {
+            unsupported: [
+              'Browser not supported',
+              'Laser Type needs an up-to-date browser. Use the latest Chrome, Edge, Firefox or Safari.',
+            ],
+            failed: [
+              'Could not start',
+              'Something kept the game from loading. Reload the page; if it keeps happening, update your browser (a recent Chrome, Edge, Firefox or Safari).',
+            ],
+            reload: 'Reload',
+          },
+        };
+
+        // Same language as the game: the one saved in its settings, Portuguese by default.
+        function language() {
+          try {
+            var saved = JSON.parse(window.localStorage.getItem('lasertype.settings.v1') || 'null');
+            if (saved && saved.language === 'en') return 'en';
+          } catch (error) {}
+          return 'pt-BR';
+        }
+
+        // reason: 'unsupported' (final: src/main.ts does not even start) or 'failed'.
+        function show(reason) {
+          var state = html.getAttribute('data-boot');
+          if (state === 'ready' || state === 'unsupported') return;
+          var lang = language();
+          var text = TEXT[lang];
+          html.setAttribute('lang', lang);
+          document.getElementById('boot-title').textContent = text[reason][0];
+          document.getElementById('boot-text').textContent = text[reason][1];
+          var reload = document.getElementById('boot-reload');
+          reload.textContent = text.reload;
+          reload.hidden = reason !== 'failed';
+          reload.onclick = function () {
+            window.location.reload();
+          };
+          html.setAttribute('data-boot', reason);
+        }
+
+        // What the game needs to start and run (CLAUDE.md §10).
+        function supported() {
+          try {
+            var canvas = document.createElement('canvas');
+            var ctx = canvas.getContext && canvas.getContext('2d');
+            return (
+              'noModule' in document.createElement('script') &&
+              !!ctx &&
+              typeof ctx.roundRect === 'function' &&
+              typeof window.DOMMatrix === 'function' &&
+              typeof window.ResizeObserver === 'function' &&
+              typeof [].at === 'function' &&
+              typeof document.body.replaceChildren === 'function' &&
+              typeof document.createElement('form').requestSubmit === 'function'
+            );
+          } catch (error) {
+            return false;
+          }
+        }
+
+        if (!supported()) {
+          show('unsupported');
+          return;
+        }
+        // Errors while starting: a script that throws or does not parse, or a script file that
+        // did not load (the capture phase also sees loading errors, which do not bubble).
+        window.addEventListener(
+          'error',
+          function (event) {
+            var target = event.target;
+            if (target && target !== window && target.tagName !== 'SCRIPT') return;
+            show('failed');
+          },
+          true
+        );
+      })();
+    </script>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

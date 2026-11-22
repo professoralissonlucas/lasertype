@@ -9,8 +9,13 @@ interface ImportMetaEnv {
   readonly VITE_FIREBASE_STORAGE_BUCKET?: string;
   readonly VITE_FIREBASE_MESSAGING_SENDER_ID?: string;
   readonly VITE_FIREBASE_APP_ID?: string;
+  /** reCAPTCHA v3 site key for App Check; missing = no App Check (CLAUDE.md §9). */
+  readonly VITE_RECAPTCHA_SITE_KEY?: string;
 }
 
 interface ImportMeta {
   readonly env: ImportMetaEnv;
 }
+
+/** Read by firebase/app-check when it starts: `true` = debug token (dev builds only, firebase/app.ts). */
+declare var FIREBASE_APPCHECK_DEBUG_TOKEN: boolean | string | undefined;

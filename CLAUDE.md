@@ -26,7 +26,7 @@
 | Jogo | Canvas 2D puro (sem engine) |
 | HUD / menus / loja | HTML + CSS sobre o canvas (sem framework de UI) |
 | Áudio | Web Audio API — efeitos sonoros **sintetizados proceduralmente em runtime** (osciladores + ruído filtrado), sem arquivos de áudio |
-| Backend | Firebase: Auth (anônimo + Google) e Firestore (SDK *lite*), carregados sob demanda só quando há config |
+| Backend | Firebase: Auth (anônimo + Google), Firestore (SDK *lite*) e App Check (reCAPTCHA v3), carregados sob demanda só quando há config |
 | Admin | `firebase-admin` (devDependency) só em `scripts/seed-shop.ts`, rodado com o TypeScript nativo do Node (sem build) |
 | Deploy | GitHub Actions → GitHub Pages |
 | Testes | Vitest para lógica pura (pontuação, economia, mira, spawn) |
@@ -45,6 +45,7 @@ npm run preview    # testar o build
 npm run test       # vitest
 npm run typecheck  # tsc --noEmit (app) + tsc --noEmit -p scripts (scripts Node)
 npm run seed:shop  # grava shop/{id} e shop/_config no Firestore (ver §9 "Loja no Firestore"); -- --dry-run só mostra
+npm run share:images  # regera public/og-image.jpg e public/apple-touch-icon.png (ver §10 "Página e compartilhamento")
 ```
 
 Antes de dar uma tarefa como concluída: `npm run typecheck && npm run test && npm run build` devem passar.
@@ -98,11 +99,19 @@ src/
   audio/                  # receitas de som (dados), planejamento puro e AudioEngine (Web Audio)
   utils/                  # rng com seed, math, pool, storage, day (dia de jogo: dayIndex/dayKey)
   styles/
+  page.test.ts            # index.html: metadados, imagem de prévia e guarda de inicialização
 public/
   music/  fonts/          # sem sfx/: efeitos sonoros são sintetizados em runtime
+  favicon.svg             # canhão disparando numa placa de palavra (feito à mão)
+  og-image.jpg  apple-touch-icon.png   # gerados por `npm run share:images`
+  boot.css                # estilo do aviso de navegador sem suporte (copiado sem processar)
 scripts/
   seed-shop.ts            # firebase-admin: grava shop/{id} e shop/_config a partir do catalog.ts
-  tsconfig.json           # tipos do Node para os scripts (o app não vê os globais do Node)
+  share-images.ts         # serve share/ com o Vite, abre no Edge/Chrome headless e salva as imagens
+  share/                  # cena da imagem de prévia, desenhada com o renderer do jogo
+  site.ts                 # URLs absolutas das tags de compartilhamento (usado pelo vite.config.ts)
+  tsconfig.json           # tipos do Node para os scripts, vite.config.ts e share/ (o app não vê os globais do Node)
+index.html                # metadados, Open Graph, <noscript> e guarda de inicialização (ES5)
 firestore.rules           # CONTRATO do backend (ver §9)
 .github/workflows/deploy.yml
 ```
@@ -320,9 +329,16 @@ scores/{uid}_{mode}_{diff}_{lang}_{day}
   - **Equipar:** só o mapa `equipped`. **Perfil:** só `name` (3–12) e `photo`.
 - `scores`: leitura pública; criação/atualização só por conta Google, com `uid` próprio, campos e limites validados, `score ≤ duration × maxPointsPerSecond` (1977, ver §11 Fase 5) e id no formato acima; atualização só com score maior.
 - `shop/*` somente leitura (gravado pelo script admin).
-- Ativar App Check (reCAPTCHA v3) quando o deploy estiver no ar.
+- App Check (reCAPTCHA v3) no cliente desde a Fase 6; a **imposição** é ligada no console (ver "App Check" abaixo).
 - As chaves de config do Firebase podem ficar no front-end; a segurança está nas regras.
 - **Não implementar venda de moedas por dinheiro real** (exigiria validação em servidor / Cloud Functions).
+
+### App Check (`firebase/app.ts`)
+- Liga só com `VITE_RECAPTCHA_SITE_KEY` (chave de **site** do reCAPTCHA v3; a chave **secreta** vai só no console do Firebase). Sem ela, ou sem `VITE_FIREBASE_*`, nada de App Check e o jogo segue igual.
+- `loadFirebase` baixa `firebase/app-check` junto com os outros módulos (import dinâmico, nada no bundle inicial) e chama `initializeAppCheck(app, { provider: new ReCaptchaV3Provider(chave), isTokenAutoRefreshEnabled: true })` logo depois de `initializeApp` e **antes** de `getAuth`/`getFirestore`: nenhuma requisição sai sem token. Todo uso do SDK passa por `loadFirebase`.
+- **Desenvolvimento** (`import.meta.env.DEV`): `self.FIREBASE_APPCHECK_DEBUG_TOKEN = true` antes do `initializeAppCheck`. O SDK gera um token de depuração, guarda no IndexedDB daquele navegador e o imprime no console ("Firebase App Check debug token: …"). Registrar em Console → App Check → Apps → app web → ⋮ → Gerenciar tokens de depuração. É secreto: não commitar; revogar quando não usar mais. Some do build de produção (código morto).
+- O Firebase esconde o selo do reCAPTCHA; os termos do Google pedem então o aviso na página: o menu mostra "Protegido pelo reCAPTCHA do Google: Privacidade · Termos" (só quando o App Check está ligado).
+- Imposição (Console → App Check → APIs → Cloud Firestore e Authentication → Aplicar): ligar só depois de ver nas métricas que quase todo o tráfego chega com token válido. Imposta, requisição sem token é recusada e o jogo trata como sem rede (moedas pendentes, ranking indisponível). Bloqueadores que barram o reCAPTCHA caem nesse caso.
 
 ### Sync de `users/{uid}` (`economy/firestoreRepository.ts`)
 - **Uma escrita = um tipo, só com os campos dele** (construtores puros em `firebase/profile.ts`, conferidos por `rules.test.ts`):
@@ -350,7 +366,19 @@ scores/{uid}_{mode}_{diff}_{lang}_{day}
 - `vite.config.ts`: `base: '/lasertype/'`.
 - Workflow `.github/workflows/deploy.yml`: build no push para `main` e publica `dist/` com `actions/deploy-pages`.
 - Config do Firebase via variáveis `VITE_FIREBASE_*` (arquivo `.env.local` fora do git; no CI, os 6 secrets `VITE_FIREBASE_API_KEY`, `_AUTH_DOMAIN`, `_PROJECT_ID`, `_STORAGE_BUCKET`, `_MESSAGING_SENDER_ID`, `_APP_ID` entram no passo de build). Sem eles o build sai offline (sem conta/ranking).
-- Adicionar o domínio `<usuario>.github.io` em Authentication → Domínios autorizados no Firebase.
+- App Check: secret `VITE_RECAPTCHA_SITE_KEY` (mais o `.env.local` para desenvolvimento). Sem ele, build sem App Check.
+- Adicionar o domínio `<usuario>.github.io` em Authentication → Domínios autorizados no Firebase e na lista de domínios da chave do reCAPTCHA v3.
+
+### Página e compartilhamento (`index.html`)
+- `<title>`, `description`, `theme-color` (= `--bg`), `color-scheme: dark`, favicon SVG e `apple-touch-icon`.
+- Open Graph + `twitter:card` com `og-image.jpg` (1200×630, JPEG < 300 KB por causa do WhatsApp). Previews só seguem URL absoluta: no build, o plugin do `vite.config.ts` (`scripts/site.ts`) troca `og:url`, `og:image` e `twitter:image` por `https://<dono>.github.io/lasertype/...`, com o dono vindo de `GITHUB_REPOSITORY_OWNER` (o Actions sempre define) ou `SITE_ORIGIN` (outro domínio). Build local = caminhos relativos.
+- `og-image.jpg` e `apple-touch-icon.png` saem de `npm run share:images`: o Vite serve `scripts/share/` (cena desenhada com as funções do jogo: fundo, palavras, laser, partículas, canhão + título e slogan do `i18n.ts`) e o Edge/Chrome instalado roda em modo headless (`CHROME_PATH` para outro executável); a página devolve as imagens por POST e o script grava em `public/`. Rodar de novo quando o visual do jogo ou o favicon mudar.
+- **Aviso de navegador** (`boot.css` + script ES5 no fim do `index.html`): `<noscript>` pede para ativar o JavaScript (pt-BR + EN). O guarda confere o que o jogo usa (módulos ES, canvas 2D com `roundRect`, `DOMMatrix`, `ResizeObserver`, `Array.prototype.at`, `replaceChildren`, `requestSubmit`) e marca `<html data-boot>`:
+  - `unsupported`: mostra "Navegador sem suporte" e o `main.ts` nem inicia o jogo;
+  - `failed`: erro antes do fim da inicialização (script que não carrega, erro de sintaxe ou exceção) → "Não foi possível iniciar" + Recarregar;
+  - `ready`: o `main.ts` marca no fim do `start()`; dali em diante o aviso fica escondido.
+  - Idioma do aviso = o salvo nas configurações (`lasertype.settings.v1`), português por padrão. O CSS fica em `public/` porque o Vite reescreveria um `<style>` inline com sintaxe moderna (`inset`, cor hex de 8 dígitos); `page.test.ts` cobre o guarda num DOM falso.
+- Usar uma API nova do navegador na inicialização ou no loop = incluir no `supported()` do guarda.
 
 ---
 
@@ -409,10 +437,12 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Missões, streak e XP: **só os campos** (lógica pendente).
   - Testado com servidor falso que aplica os limites das regras (`firestoreRepository.test.ts`); não testado contra o Firebase real.
   - Pendências no console: publicar `firestore.rules` e rodar `npm run seed:shop` (sem `shop/*` toda compra é recusada).
-- [ ] **Fase 6 — Deploy:** GitHub Actions + Pages, App Check.
-  - [x] Workflow `.github/workflows/deploy.yml` (antecipado com autorização em 2026-11-21): no push para `main` roda `npm ci`, testes e build (Node 26) e publica `dist/` com `actions/deploy-pages`. Requer Settings → Pages → Source = "GitHub Actions".
-  - [x] Secrets `VITE_FIREBASE_*` no passo de build (Fase 5).
-  - [ ] Falta: App Check.
+- [x] **Fase 6 — Deploy:** GitHub Actions + Pages, App Check, acabamento da página.
+  - Workflow `.github/workflows/deploy.yml` (antecipado com autorização em 2026-11-21): no push para `main` roda `npm ci`, testes e build (Node 26) e publica `dist/` com `actions/deploy-pages`. Requer Settings → Pages → Source = "GitHub Actions". Secrets `VITE_FIREBASE_*` (Fase 5) e `VITE_RECAPTCHA_SITE_KEY` no passo de build.
+  - App Check com reCAPTCHA v3 iniciado dentro de `loadFirebase`, antes de Auth/Firestore, com debug token em desenvolvimento (§9 "App Check"); crédito do reCAPTCHA no menu. Testado com o SDK simulado (ordem das chamadas, provedor, auto refresh, debug token); não testado contra o Firebase real.
+  - Acabamento (§10 "Página e compartilhamento"): título, descrição, `theme-color`, favicon SVG do canhão, `apple-touch-icon`, Open Graph com imagem gerada pelo renderer do jogo, aviso de navegador sem suporte / sem JavaScript / falha ao iniciar. Os avisos foram conferidos no Edge headless (desktop e 360 px).
+  - Desempenho do build (2026-11-22, gzip): carga inicial ≈ 56 KB (JS 48,2 + CSS 4,9 + HTML 2,5 + `boot.css`). Firebase fora do bundle inicial, em chunks dinâmicos pedidos logo após a inicialização, sem bloquear a primeira tela: núcleo 11,4, Auth 36,6, Firestore lite 39,0, App Check 5,5 (≈ 92 KB). O script do reCAPTCHA vem do Google, também em segundo plano. Nenhum `modulepreload` do Firebase no HTML; a ativação do debug token não entra no build de produção.
+  - Pendências no console: registrar o app no App Check com a chave secreta do reCAPTCHA, registrar o debug token de desenvolvimento, criar o secret `VITE_RECAPTCHA_SITE_KEY` no GitHub e, depois de conferir as métricas, aplicar a imposição no Firestore e no Authentication.
 - [ ] **Fase 7 — Extras:** Desafio Diário, boss, conquistas, coleções, suporte mobile.
 
 ---

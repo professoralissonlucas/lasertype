@@ -26,6 +26,15 @@ export function button(
   return node;
 }
 
+/** A link that opens in a new tab without giving it access to this page. */
+export function externalLink(href: string, text: string): HTMLAnchorElement {
+  const node = el('a', undefined, text);
+  node.href = href;
+  node.target = '_blank';
+  node.rel = 'noopener noreferrer';
+  return node;
+}
+
 export interface RadioOption<T extends string> {
   readonly value: T;
   readonly label: string;
