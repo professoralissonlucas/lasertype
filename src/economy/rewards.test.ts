@@ -35,7 +35,8 @@ describe('matchReward', () => {
     expect(matchReward({ score: 1_000_000, grade: 'S', mode: 'zen' }).total).toBe(25);
   });
 
-  it('Survival and Time Attack pay in full', () => {
+  it('Survival, Time Attack and the Daily Challenge pay in full', () => {
+    expect(matchReward({ score: 5000, grade: 'A', mode: 'daily' }).total).toBe(60);
     expect(matchReward({ score: 5000, grade: 'A', mode: 'timeAttack' }).total).toBe(60);
     expect(matchReward({ score: 5000, grade: 'A', mode: 'survival' }).total).toBe(60);
   });

@@ -1,17 +1,21 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { CONFIG } from '../config.ts';
 import {
+  dailyBonusFields,
   equipFields,
   profileFields,
   purchaseFields,
   rewardFields,
+  type DailyBonusAttempt,
   type OpenedUser,
   type PurchaseAttempt,
   type UserBackend,
   type UserSnapshot,
 } from '../firebase/profile.ts';
 import { defaultNickname } from '../profile/nickname.ts';
+import { dayIndex } from '../utils/day.ts';
 import { memoryStore } from '../utils/storage.ts';
+import type { DailyBonus } from './dailyBonus.ts';
 import { CLOUD_CACHE_KEY, FirestoreInventoryRepository } from './firestoreRepository.ts';
 import { INVENTORY_KEY } from './repository.ts';
 import type { Equipped, Inventory } from './types.ts';
@@ -29,10 +33,12 @@ interface ServerDoc {
   lastPurchase: string | null;
   name: string;
   lastReward: number;
+  /** stats.dailyDay */
+  dailyDay: number | null;
 }
 
 interface Write {
-  readonly kind: 'create' | 'reward' | 'purchase' | 'equip' | 'profile';
+  readonly kind: 'create' | 'reward' | 'bonus' | 'purchase' | 'equip' | 'profile';
   readonly uid: string;
   /** Top-level fields the write touched. */
   readonly fields: readonly string[];
@@ -48,6 +54,9 @@ class FakeServer implements UserBackend {
   readonly writes: Write[] = [];
   offline = false;
   refuseRewards = 0;
+  refuseBonuses = false;
+  /** Commits the next bonus but loses the answer on the way back. */
+  loseBonusAnswer = false;
   refusePurchases = false;
   private active = 0;
   maxActive = 0;
@@ -60,6 +69,7 @@ class FakeServer implements UserBackend {
       lastPurchase: null,
       name: 'Servidor',
       lastReward: Date.now() - 3_600_000,
+      dailyDay: null,
       ...doc,
     });
   }
@@ -77,7 +87,7 @@ class FakeServer implements UserBackend {
       equipped: { ...doc.equipped },
       lastPurchase: doc.lastPurchase,
     };
-    return { inventory, name: doc.name, lastReward: doc.lastReward };
+    return { inventory, name: doc.name, lastReward: doc.lastReward, dailyDay: doc.dailyDay };
   }
 
   /** Every call takes a network round trip; counts overlapping calls. */
@@ -103,15 +113,39 @@ class FakeServer implements UserBackend {
     });
   }
 
+  /** isReward: 0 ≤ gain ≤ 150 and request.time > lastReward + 30 s. */
+  private checkReward(doc: ServerDoc, amount: number, now: number): void {
+    if (this.refuseRewards > 0 || amount > MAX || amount < 0 || !(now > doc.lastReward + INTERVAL_MS)) {
+      this.refuseRewards = Math.max(0, this.refuseRewards - 1);
+      throw firestoreError('permission-denied');
+    }
+  }
+
+  dailyBonus(uid: string, day: number, amount: number): Promise<DailyBonusAttempt> {
+    return this.call((): DailyBonusAttempt => {
+      const doc = this.doc(uid);
+      const now = Date.now();
+      if (doc.dailyDay !== null && doc.dailyDay >= day) return { kind: 'alreadyPaid', snapshot: this.snapshot(doc) };
+      if (this.refuseBonuses) throw firestoreError('permission-denied');
+      this.checkReward(doc, amount, now);
+      const fields = dailyBonusFields(doc.coins, amount, day, now);
+      doc.coins = fields.coins;
+      doc.lastReward = now;
+      doc.dailyDay = day;
+      this.writes.push({ kind: 'bonus', uid, fields: topLevel(fields), amount, at: now });
+      if (this.loseBonusAnswer) {
+        this.loseBonusAnswer = false;
+        throw firestoreError('unavailable');
+      }
+      return { kind: 'paid', snapshot: { ...this.snapshot(doc), lastReward: null } };
+    });
+  }
+
   reward(uid: string, amount: number): Promise<UserSnapshot> {
     return this.call(() => {
       const doc = this.doc(uid);
       const now = Date.now();
-      // isReward: 0 ≤ gain ≤ 150 and request.time > lastReward + 30 s.
-      if (this.refuseRewards > 0 || amount > MAX || amount < 0 || !(now > doc.lastReward + INTERVAL_MS)) {
-        this.refuseRewards = Math.max(0, this.refuseRewards - 1);
-        throw firestoreError('permission-denied');
-      }
+      this.checkReward(doc, amount, now);
       const fields = rewardFields(doc.coins, amount, now);
       doc.coins = fields.coins;
       doc.lastReward = now;
@@ -294,6 +328,158 @@ describe('FirestoreInventoryRepository — rewards', () => {
     repo.setUser('u1');
     await settle(INTERVAL_MS + 5000);
     expect(server.doc('u1').coins).toBe(50);
+  });
+});
+
+describe('FirestoreInventoryRepository — Daily Challenge bonus', () => {
+  const TODAY = dayIndex(NOON);
+  const bonus = (day: number, coins = 100): DailyBonus => ({ day, position: 3, coins });
+
+  async function ready(doc: Partial<ServerDoc> = {}) {
+    const all = setup();
+    all.server.seed('u1', { coins: 500, ...doc });
+    all.repo.setUser('u1');
+    await settle();
+    const paid: DailyBonus[] = [];
+    all.repo.subscribeBonus((entry) => paid.push(entry));
+    return { ...all, paid };
+  }
+
+  it('is a reward write of its own that marks the day; it counts once the server accepted it', async () => {
+    const { repo, server, paid } = await ready();
+    repo.settleDaily(TODAY - 1, bonus(TODAY - 1));
+    expect(repo.load().coins).toBe(500);
+    expect(repo.dailySettled).toBe(TODAY - 1);
+    await settle();
+    expect(server.writes).toEqual([
+      { kind: 'bonus', uid: 'u1', fields: ['coins', 'lastReward', 'stats'], amount: 100, at: NOON },
+    ]);
+    expect(server.doc('u1')).toMatchObject({ coins: 600, dailyDay: TODAY - 1 });
+    expect(repo.load().coins).toBe(600);
+    expect(paid).toEqual([bonus(TODAY - 1)]);
+  });
+
+  it('never mixes with the match coins: separate writes, at most 150, 30 s apart', async () => {
+    const { repo, server, paid } = await ready();
+    repo.reward(90);
+    repo.settleDaily(TODAY - 2, bonus(TODAY - 2, 150));
+    repo.settleDaily(TODAY - 1, bonus(TODAY - 1, 70));
+    await settle(5 * 60_000);
+    expect(server.writes.map((write) => [write.kind, write.amount])).toEqual([
+      ['bonus', 150],
+      ['bonus', 70],
+      ['reward', 90],
+    ]);
+    for (let i = 1; i < server.writes.length; i++) {
+      expect((server.writes[i]?.at ?? 0) - (server.writes[i - 1]?.at ?? 0)).toBeGreaterThan(INTERVAL_MS);
+    }
+    expect(server.doc('u1')).toMatchObject({ coins: 500 + 150 + 70 + 90, dailyDay: TODAY - 1 });
+    expect(paid.map((entry) => entry.day)).toEqual([TODAY - 2, TODAY - 1]);
+  });
+
+  it('is paid once when two devices find the same day', async () => {
+    const { repo, server, paid } = await ready();
+    const other = new FirestoreInventoryRepository({ store: memoryStore(), backend: async () => server });
+    const otherPaid: DailyBonus[] = [];
+    other.subscribeBonus((entry) => otherPaid.push(entry));
+    other.setUser('u1');
+    await settle();
+    repo.settleDaily(TODAY - 1, bonus(TODAY - 1));
+    other.settleDaily(TODAY - 1, bonus(TODAY - 1));
+    await settle(5 * 60_000);
+    expect(server.kinds()).toEqual(['bonus']);
+    expect(server.doc('u1').coins).toBe(600);
+    expect(paid.length + otherPaid.length).toBe(1);
+    expect(repo.load().coins).toBe(600);
+    expect(other.load().coins).toBe(600);
+  });
+
+  it('a lost answer is not paid again', async () => {
+    const { repo, server, paid } = await ready();
+    server.loseBonusAnswer = true;
+    repo.settleDaily(TODAY - 1, bonus(TODAY - 1));
+    await settle(5 * 60_000);
+    expect(server.kinds()).toEqual(['bonus']);
+    expect(server.doc('u1').coins).toBe(600);
+    expect(repo.load().coins).toBe(600);
+    expect(paid).toEqual([]);
+  });
+
+  it('settling a day twice queues its bonus once; a day without a bonus queues nothing', async () => {
+    const { repo, server } = await ready();
+    repo.settleDaily(TODAY - 2, null);
+    repo.settleDaily(TODAY - 1, bonus(TODAY - 1));
+    repo.settleDaily(TODAY - 1, bonus(TODAY - 1));
+    await settle(5 * 60_000);
+    expect(server.kinds()).toEqual(['bonus']);
+  });
+
+  it('waits out the network going down', async () => {
+    const { repo, server, paid } = await ready();
+    server.offline = true;
+    repo.settleDaily(TODAY - 1, bonus(TODAY - 1));
+    await settle(60_000);
+    expect(server.doc('u1').coins).toBe(500);
+    expect(paid).toEqual([]);
+    server.offline = false;
+    await settle(5 * 60_000);
+    expect(server.doc('u1').coins).toBe(600);
+    expect(paid).toEqual([bonus(TODAY - 1)]);
+  });
+
+  it('is kept in the cache for the next session', async () => {
+    const closed = await ready();
+    closed.server.offline = true;
+    closed.repo.settleDaily(TODAY - 1, bonus(TODAY - 1)); // the tab closes before it is sent
+
+    const next = setup({ [CLOUD_CACHE_KEY]: closed.store.data.get(CLOUD_CACHE_KEY) ?? '' });
+    next.server.seed('u1', { coins: 500 });
+    expect(next.repo.dailySettled).toBe(TODAY - 1);
+    const paid: DailyBonus[] = [];
+    next.repo.subscribeBonus((entry) => paid.push(entry));
+    next.repo.setUser('u1');
+    await settle();
+    expect(next.server.doc('u1')).toMatchObject({ coins: 600, dailyDay: TODAY - 1 });
+    expect(paid).toEqual([bonus(TODAY - 1)]);
+  });
+
+  it('a bonus that keeps being refused never blocks the match coins', async () => {
+    const { repo, server } = await ready();
+    server.refuseBonuses = true;
+    repo.settleDaily(TODAY - 1, bonus(TODAY - 1));
+    repo.reward(100);
+    repo.reward(100);
+    await settle(20 * 60_000);
+    expect(server.doc('u1').coins).toBe(700);
+    expect(repo.pendingCoins).toBe(0);
+  });
+
+  it('knows the days paid on another device, but ignores a day in the future', async () => {
+    expect((await ready({ dailyDay: TODAY - 1 })).repo.dailySettled).toBe(TODAY - 1);
+    expect((await ready({ dailyDay: TODAY + 400 })).repo.dailySettled).toBeNull();
+  });
+
+  it('is ready only once the document was read, and for the account in use', async () => {
+    const { repo, server } = setup();
+    expect(repo.readyUid).toBeNull();
+    server.offline = true;
+    repo.setUser('u1');
+    await settle();
+    expect(repo.readyUid).toBeNull();
+    server.offline = false;
+    await settle(60_000);
+    expect(repo.readyUid).toBe('u1');
+  });
+
+  it('drops tampered bonuses from the cache', () => {
+    const bonuses = [bonus(TODAY - 1), bonus(TODAY - 2, 9999), { day: 'x', position: 1, coins: 10 }, null];
+    const { repo, store } = setup({
+      [CLOUD_CACHE_KEY]: JSON.stringify({ last: 'u1', users: { u1: { bonuses, dailySettled: 'soon' } } }),
+    });
+    expect(repo.dailySettled).toBeNull();
+    repo.reward(1); // writes the cache back
+    const cache = JSON.parse(store.data.get(CLOUD_CACHE_KEY) ?? '{}') as { users: { u1: { bonuses: unknown } } };
+    expect(cache.users.u1.bonuses).toEqual([bonus(TODAY - 1)]);
   });
 });
 

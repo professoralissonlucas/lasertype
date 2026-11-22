@@ -16,8 +16,8 @@ export interface RankingConfig {
   readonly nameMax: number;
 }
 
-/** Modes with a ranking ('daily' joins in Phase 7; Zen never enters it). */
-export const RANKED_MODES = ['survival', 'timeAttack'] as const;
+/** Modes with a ranking (Zen never enters it). */
+export const RANKED_MODES = ['survival', 'timeAttack', 'daily'] as const;
 export type RankedMode = (typeof RANKED_MODES)[number];
 
 /** One leaderboard: a mode, difficulty, word language and day (0 outside the daily mode). */

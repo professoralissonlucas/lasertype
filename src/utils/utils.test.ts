@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { createIntegerFormatter, formatCountdown, formatPercent, formatTime } from './format.ts';
+import { dayIndex } from './day.ts';
+import { createIntegerFormatter, formatCountdown, formatGameDay, formatPercent, formatTime } from './format.ts';
 import { aimAngle, clamp, lerp } from './math.ts';
 
 describe('math', () => {
@@ -31,6 +32,12 @@ describe('format', () => {
     expect(createIntegerFormatter('pt-BR')(12340)).toBe('12.340');
     expect(createIntegerFormatter('en')(12340)).toBe('12,340');
     expect(createIntegerFormatter('en')(7.6)).toBe('8');
+  });
+
+  it('formats a game day as day and month, the Brasília date whatever the device time zone', () => {
+    const day = dayIndex(Date.parse('2026-11-23T02:59:59Z')); // still the 22nd in Brasília
+    expect(formatGameDay(day, 'pt-BR')).toBe('22/11');
+    expect(formatGameDay(day, 'en')).toBe('11/22');
   });
 
   it('formats ratios as whole percentages', () => {

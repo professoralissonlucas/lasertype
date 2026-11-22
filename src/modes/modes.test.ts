@@ -17,6 +17,15 @@ describe('MODES', () => {
     expect(CONFIG.timeAttackSeconds).toBe(60);
   });
 
+  it('Daily: Survival rules, always on Normal', () => {
+    const { timeLimit, damage, waveBreak } = MODES.survival;
+    expect(MODES.daily).toMatchObject({ timeLimit, damage, waveBreak, fixedDifficulty: 'normal' });
+  });
+
+  it('the other modes use the difficulty chosen in the menu', () => {
+    for (const id of MODE_IDS) if (id !== 'daily') expect(MODES[id].fixedDifficulty).toBeNull();
+  });
+
   it('Zen: no damage, no clock', () => {
     expect(MODES.zen).toMatchObject({ timeLimit: null, damage: false });
   });

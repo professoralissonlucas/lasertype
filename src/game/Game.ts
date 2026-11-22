@@ -5,6 +5,7 @@ import type { SoundPlayer } from '../audio/types.ts';
 import { CONFIG } from '../config.ts';
 import { DEFAULT_COSMETICS } from '../cosmetics/equip.ts';
 import type { ResolvedCosmetics } from '../cosmetics/types.ts';
+import { matchContent, type MatchContent } from '../modes/daily.ts';
 import type { ModeRules } from '../modes/types.ts';
 import { aimAngle } from '../utils/math.ts';
 import { createRng } from '../utils/rng.ts';
@@ -59,7 +60,7 @@ export interface MatchConfig {
   readonly lang: Language;
   readonly mode: ModeRules;
   readonly difficulty: GameDifficulty;
-  /** Fixed seed (e.g. from `?seed=`); null = a new seed every match. */
+  /** Fixed seed (e.g. from `?seed=`); null = a new one every match. Ignored by the Daily Challenge. */
   readonly seed: string | null;
   readonly requireAccents: boolean;
   /** "Reduzir efeitos": no shake/flash, static background, fewer particles. */
@@ -145,13 +146,15 @@ export class Game {
 
   startMatch(config: MatchConfig): void {
     const words = getWordList(config.lang);
+    // Resolved at every start: a restart after the day turned plays the new day's challenge.
+    const content = matchContent(config.mode.id, config.seed, Date.now());
     this.effects = new Effects(config.reduceEffects, undefined, this.cosmetics.explosion);
     this.match = {
       config,
       words,
       typing: { requireAccents: config.requireAccents },
-      state: this.createState(config),
-      spawner: this.createSpawner(config, words),
+      state: this.createState(config, content),
+      spawner: this.createSpawner(config, words, content),
     };
     this.resetMatchVisuals();
     this.input.attach(window);
@@ -184,12 +187,12 @@ export class Game {
     this.flushEvents();
   }
 
-  private createState(config: MatchConfig): MatchState {
-    return createMatchState({ mode: config.mode, difficulty: config.difficulty });
+  private createState(config: MatchConfig, content: MatchContent): MatchState {
+    return createMatchState({ mode: config.mode, difficulty: config.difficulty, day: content.day });
   }
 
-  private createSpawner(config: MatchConfig, words: WordList): Spawner {
-    return new Spawner(config.seed ?? Date.now(), words, {
+  private createSpawner(config: MatchConfig, words: WordList, content: MatchContent): Spawner {
+    return new Spawner(content.seed, words, {
       spawn: applyDifficulty(CONFIG.spawn, CONFIG.difficulty[config.difficulty]),
       waves: CONFIG.waves,
       specials: CONFIG.specials,

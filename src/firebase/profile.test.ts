@@ -16,7 +16,16 @@ describe('parseUserDoc (untrusted users/{uid})', () => {
       inventory: { coins: 1200, owned: { theme_void: true }, equipped: { theme: 'theme_void' }, lastPurchase: 'theme_void' },
       name: 'Ana',
       lastReward: 1_700_000_000_000,
+      dailyDay: null,
     });
+  });
+
+  it('reads the last Daily Challenge day paid (stats.dailyDay)', () => {
+    expect(parseUserDoc({ stats: { games: 0, dailyDay: 20779 } }).dailyDay).toBe(20779);
+    for (const dailyDay of ['20779', 20779.5, Number.NaN, null, true]) {
+      expect(parseUserDoc({ stats: { dailyDay } }).dailyDay).toBeNull();
+    }
+    expect(parseUserDoc({ stats: 'x' }).dailyDay).toBeNull();
   });
 
   it('repairs whatever is wrong instead of failing', () => {
@@ -24,6 +33,7 @@ describe('parseUserDoc (untrusted users/{uid})', () => {
       inventory: { coins: 0, owned: {}, equipped: {}, lastPurchase: null },
       name: null,
       lastReward: null,
+      dailyDay: null,
     });
     const snapshot = parseUserDoc({
       coins: -5,
@@ -43,6 +53,7 @@ describe('parseUserDoc (untrusted users/{uid})', () => {
       inventory: { coins: 0, owned: {}, equipped: {}, lastPurchase: null },
       name: 'Piloto0001',
       lastReward: 42,
+      dailyDay: null,
     });
   });
 });

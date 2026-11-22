@@ -73,7 +73,7 @@ src/
                           # (drawCannon, drawWord, drawFx, drawBackground) e Skin (cosméticos → sprites/cores)
       cannon/             # camadas do canhão: model (pose e regras puras), kit (peças comuns),
                           # platforms, barrels, heads, muzzle; drawCannon.ts monta tudo (§7 "Canhão")
-  modes/                  # survival, timeAttack, zen, daily
+  modes/                  # survival, timeAttack, daily, zen; daily.ts: seed e dia do Desafio Diário
   words/                  # listas pt-BR.json, en.json (por dificuldade)
   cosmetics/
     types.ts              # categorias, raridades, params tipados por categoria
@@ -82,6 +82,8 @@ src/
   economy/                # lógica pura (sem DOM) + os repositórios (onde o inventário mora)
     types.ts              # Inventory (espelha users/{uid}), ofertas, erros de compra, EconomyChange, SyncConfig
     rewards.ts            # moedas por partida (missões, streak, XP: só os campos por enquanto)
+    dailyBonus.ts         # bônus do Desafio Diário (puro: tabela, dias a acertar)
+    DailyBonusCollector.ts # acha a posição final nos dias fechados e entrega o bônus ao repositório
     shop.ts               # loja rotativa (dia de jogo, DISCOUNT_ORDER, seed = data)
     inventory.ts          # posse/equipamento/compra (puro: checkPurchase, applyPurchase, parseInventory)
     repository.ts         # interface InventoryRepository (uma operação por tipo de escrita) + versão localStorage (builds offline)
@@ -149,7 +151,7 @@ firestore.rules           # CONTRATO do backend (ver §9)
 - **Combo:** cada palavra destruída digitando, sem nenhum erro enquanto estava travada, +1. Qualquer tecla errada (inclusive sem alvo) zera. Dano no escudo **não** zera. Multiplicador: 1x (0–4), 2x (5–14), 3x (15–29), 4x (30+). Lógica pura em `game/combo.ts` (reducer) e `game/scoring.ts`.
 - **Escudo:** 3 HP (também o máximo). Palavra que cruza o perímetro = −1 HP.
 - **EMP:** cada palavra destruída digitando carrega `5% × multiplicador` (20 palavras a 1x; bem menos com combo). Com 100%, `Espaço` destrói todas as palavras na tela por metade dos pontos, esvazia a barra e mantém o combo. Sem carga cheia = som de recusa.
-- **Ondas** (`game/waves.ts`): cada onda tem uma **cota fixa** de palavras (8, +2 por onda, máx. 30); intervalo ×0,92, velocidade +7%, mais palavras difíceis e especiais a cada onda (com tetos em `config.ts`). Como a cota é fixa, a N-ésima palavra pertence sempre à mesma onda e a sequência depende só da seed. Survival/Zen: após a última palavra da onda, espera a tela limpar e dá 2,5 s de respiro com o anúncio "Onda N"; Time Attack emenda as ondas. Boss a cada 5 ondas (frase que se divide em palavras) fica para a Fase 7.
+- **Ondas** (`game/waves.ts`): cada onda tem uma **cota fixa** de palavras (8, +2 por onda, máx. 30); intervalo ×0,92, velocidade +7%, mais palavras difíceis e especiais a cada onda (com tetos em `config.ts`). Como a cota é fixa, a N-ésima palavra pertence sempre à mesma onda e a sequência depende só da seed. Survival/Diário/Zen: após a última palavra da onda, espera a tela limpar e dá 2,5 s de respiro com o anúncio "Onda N"; Time Attack emenda as ondas. Boss a cada 5 ondas (frase que se divide em palavras) fica para a Fase 7.
 - **Palavras especiais:** 💣 Bomba (destrói vizinhas), ❄️ Gelo (slow 3s), 🛡️ Escudo (+1 HP), ☠️ Blindada (digitar 2x).
   - Efeitos só disparam quando a palavra é destruída **digitando**; palavras pegas por bomba/EMP valem metade e não disparam efeito (sem reação em cadeia, EMP não cura).
   - Bomba: elipse de 0,2 largura × 0,22 altura do campo. Gelo: palavras e ritmo de spawn a 40% por 3 s (o relógio do Time Attack não desacelera). Escudo: +1 HP até o máximo. Blindada: 2 passadas, continua travada entre elas, letras contam em dobro na pontuação.
@@ -174,14 +176,17 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
 
 ### Dificuldade (escolhida no menu)
 - Fácil / Normal / Difícil são presets (`CONFIG.difficulty`) aplicados ao spawn da onda 1; a curva das ondas continua igual por cima. Fácil: velocidade ×0,8, intervalo ×1,2, +15% de palavras fáceis. Difícil: velocidade ×1,25, intervalo ×0,85, −25% de palavras fáceis.
-- A pontuação não muda com a dificuldade → o ranking (Fase 5) separa por modo, dificuldade **e** idioma das palavras. O Desafio Diário (Fase 7) usa Normal.
+- A pontuação não muda com a dificuldade → o ranking (Fase 5) separa por modo, dificuldade **e** idioma das palavras. O Desafio Diário usa sempre Normal (`ModeRules.fixedDifficulty`): no menu a dificuldade fica travada e a escolha do jogador volta nos outros modos.
 
 ### Modos (`src/modes/`, dados puros)
 - **Survival:** infinito até o escudo zerar.
 - **Time Attack:** 60 s, maior pontuação.
 - **Zen:** sem dano, para treinar (não vale ranking nem moedas cheias). Termina pela pausa (`Esc` → `Enter`).
 - Modo, dificuldade e idioma são escolhidos no menu principal (e lembrados nas configurações).
-- **Desafio Diário:** seed = `dayKey()` de `utils/day.ts` (`YYYY-MM-DD` do dia de jogo, que vira às 03:00 UTC = meia-noite de Brasília, o mesmo calendário da loja); mesma sequência para todos; ranking próprio.
+- **Desafio Diário** (`modes/daily.ts`): regras do Survival, dificuldade fixa `normal`, seed `daily:YYYY-MM-DD` do `dayIndex()` de `utils/day.ts` (vira às 03:00 UTC = meia-noite de Brasília, o mesmo calendário da loja). Sequência idêntica para todos, o dia todo; `?seed=` não vale aqui. Um idioma por vez (o do menu): cada idioma é um desafio e um quadro próprios. Tentativas livres, vale o recorde.
+  - O `day` fica preso à partida quando ela **começa** (`MatchState.day` → `MatchReport.day` → `MatchResult.day`; 0 nos outros modos). "Jogar de novo"/`Tab` resolvem a seed de novo: depois da virada, jogam o desafio novo.
+  - Se o dia virou antes do envio, o resultado **não** é enviado (nem ao dia novo, que é outra sequência) e o relatório avisa. Se o servidor recusa o dia (data do aparelho errada), o aviso é outro.
+  - Mudar listas de palavras, spawn ou ondas muda a sequência: um deploy no meio do dia troca o desafio de quem recarregar.
 
 ---
 
@@ -228,9 +233,16 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
 **Regra de ouro: cosméticos nunca dão vantagem de jogo.**
 
 ### Ganho de moedas
-- Partida: `floor((min(floor(pontos / 100), 80) + bônus de nota) × fator do modo)`; bônus S +20, A +10, B +5, C/D 0; fator 1 (Survival, Time Attack) ou 0,25 (Zen). Máximo 100 por partida. Creditado uma vez, ao abrir o Mission Report (que mostra o detalhe e o saldo). Números em `CONFIG.economy`, lógica em `economy/rewards.ts`.
+- Partida: `floor((min(floor(pontos / 100), 80) + bônus de nota) × fator do modo)`; bônus S +20, A +10, B +5, C/D 0; fator 1 (Survival, Time Attack, Diário) ou 0,25 (Zen). Máximo 100 por partida. Creditado uma vez, ao abrir o Mission Report (que mostra o detalhe e o saldo). Números em `CONFIG.economy`, lógica em `economy/rewards.ts`.
 - Online, as moedas aparecem na hora e ficam **pendentes** até o servidor aceitar: cada escrita de recompensa leva no máximo 150 e espera 30 s desde a anterior (limites das regras, em `CONFIG.sync`); o resto vai nas escritas seguintes, sem perder nada (ver §9 "Sync de users/{uid}").
-- Missões diárias (3 por dia, geradas pela data), streak de login, nível por XP, bônus do Desafio Diário. **Por enquanto só os campos existem** em `users/{uid}` (`xp`, `level`, `streak`, `lastLogin`, `stats`, criados com valores iniciais e nunca atualizados); a lógica fica para depois.
+- Missões diárias (3 por dia, geradas pela data), streak de login, nível por XP. **Por enquanto só os campos existem** em `users/{uid}` (`xp`, `level`, `streak`, `lastLogin`, `stats`, criados com valores iniciais; de `stats` só `dailyDay` é atualizado); a lógica fica para depois.
+
+### Bônus do Desafio Diário (`CONFIG.dailyBonus`, `economy/dailyBonus.ts`)
+- Moedas pela posição **final**: 1º 150 · 2º 120 · 3º 100 · 4º–10º 70 · 11º–25º 40 · 26º–50º 20. Só no quadro **pt-BR** e a partir de 1.000 pontos (abrir e encerrar não paga). Todo valor cabe numa escrita de recompensa (≤ 150).
+- Pago **depois que o dia fecha** (5 min de folga): durante o dia, o primeiro a jogar à meia-noite estaria sempre em 1º. O quadro de um dia fechado não muda mais (as regras só aceitam o dia atual). Durante o dia, o relatório e a aba "Diário" mostram a posição e a **previsão** ("+100 moedas se terminar assim").
+- Posição = 1 + quantos têm score maior (`getCount`: 1 leitura, vale também fora do top 50); empates dividem a posição.
+- `DailyBonusCollector` roda ao abrir, ao trocar de conta e ao voltar ao menu, só com conta Google: lê o score do jogador nos dias fechados ainda não acertados (até 7 para trás, do mais antigo ao mais novo, 1 leitura por dia) e para no primeiro erro, sem pular dia. Dia acertado não é relido (`dailySettled` no cache).
+- Cada bônus é **uma escrita de recompensa só dele**, que grava também `stats.dailyDay` (último dia pago) na mesma transação: não paga duas vezes em dois dispositivos. Só entra no saldo quando o servidor confirma; aí sai o aviso (nunca por cima de uma partida). Builds offline jogam o desafio, mas sem ranking nem bônus.
 
 ### Dia de jogo (`utils/day.ts`)
 - Um único calendário para a loja e o Desafio Diário: o dia vira às **03:00 UTC** (meia-noite de Brasília) para todos.
@@ -309,12 +321,13 @@ interface CosmeticItem<T extends CosmeticType> {
 - Salvar = escrita de **perfil** (só `name`), aplicada na hora e enviada em segundo plano. O antigo `lasertype.nicknames.v1` não é mais lido. Trocar o apelido não altera recordes já enviados (as regras só aceitam atualizar com score maior).
 
 ### Ranking (`firebase/leaderboard.ts`, `ui/ranking.ts`)
-- Só contas Google enviam; Zen nunca envia. Um documento por jogador/quadro: id `${uid}_${mode}_${diff}_${lang}_${day}` (`day = dayIndex()` no modo daily, 0 nos outros).
+- Só contas Google enviam; Zen nunca envia. Um documento por jogador/quadro: id `${uid}_${mode}_${diff}_${lang}_${day}` (`day = dayIndex()` no modo daily, 0 nos outros). Os do modo daily ficam guardados (um por jogador, idioma e dia).
 - Ao fim da partida: lê o documento e só grava se **superar o recorde**; `createdAt = serverTimestamp()`, `duration` em segundos (sem pausas), `accuracy` em %, sem `photo`.
 - Antes de enviar, o cliente aplica as mesmas checagens das regras (`scoreProblems`); partidas fora dos limites (ex.: Survival com mais de 1 h, WPM > 250) não são enviadas.
 - O Mission Report mostra o resultado (novo recorde, recorde atual, entre com Google, Zen não conta, erro); entrando com Google pelo relatório, a partida é enviada em seguida.
-- Tela: abas por modo (Survival, Time Attack; Daily na Fase 7), filtros de dificuldade e idioma, top 50, linha do jogador destacada (ou abaixo da tabela, fora do top). Leituras em cache por 30 s por quadro.
-- **Índice composto** (Console → Firestore → Índices): coleção `scores`, campos `mode` ↑, `diff` ↑, `lang` ↑, `day` ↑, `score` ↓, escopo Coleção. Sem ele a consulta do top falha com `failed-precondition` (a mensagem do erro traz o link de criação).
+- Tela: abas por modo (Survival, Time Attack, Diário), filtros de dificuldade e idioma, top 50, linha do jogador destacada (ou abaixo da tabela, fora do top). Empates dividem a posição. Leituras em cache por 30 s por quadro.
+- Aba "Diário": só o dia atual, sem filtro de dificuldade; contagem até o próximo desafio, posição exata do jogador (também fora do top 50), previsão e tabela do bônus. Recarrega sozinha na virada.
+- **Índice composto** (Console → Firestore → Índices): coleção `scores`, campos `mode` ↑, `diff` ↑, `lang` ↑, `day` ↑, `score` ↓, escopo Coleção. Serve ao top e à contagem da posição (que ordena por `score` ↓ para usar o mesmo). Sem ele a consulta do top falha com `failed-precondition` (a mensagem do erro traz o link de criação).
 
 ### Coleções
 ```
@@ -324,7 +337,8 @@ users/{uid}     # criado na primeira sessão (firebase/profile.ts → newUserFie
   equipped: { [type]: itemId }        # começa {}
   lastReward: timestamp               # serverTimestamp() na criação e em cada recompensa
   lastPurchase: itemId | null
-  stats: { games: 0, bestScore: 0, bestWpm: 0 }   # só o campo, sem lógica ainda
+  stats: { games: 0, bestScore: 0, bestWpm: 0 }   # só os campos, sem lógica ainda
+    + stats.dailyDay: dayIndex                     # último dia do Desafio Diário com bônus pago
 
 shop/{itemId}   → { price, rarity, type }      # somente leitura para clientes
 shop/_config    → { discountOrder: [itemId, ...] }  # mesma ordem de DISCOUNT_ORDER
@@ -355,12 +369,14 @@ scores/{uid}_{mode}_{diff}_{lang}_{day}
 - **Uma escrita = um tipo, só com os campos dele** (construtores puros em `firebase/profile.ts`, conferidos por `rules.test.ts`):
   - criação: transação que lê e, se não existe, grava `newUserFields` (moedas 0, xp 0, `owned` {}, `lastReward = serverTimestamp()`);
   - recompensa: transação com `coins` (saldo do servidor + até 150) e `lastReward = serverTimestamp()`;
+  - bônus do Desafio Diário: a mesma recompensa mais `stats.dailyDay` (caminho de campo); se `dailyDay` já é aquele dia ou depois, nada é gravado;
   - compra: transação que lê o saldo/itens do servidor e grava `coins` (− preço exato), `owned.<id>` (caminho de campo: o resto do mapa fica intacto) e `lastPurchase`;
   - equipar: `updateDoc` só com `equipped`; perfil: `updateDoc` só com `name`.
 - Todas as escritas passam por **uma fila** (uma por vez), sempre para o uid conectado.
-- **Cache** no `localStorage` em `lasertype.cloud.v1`, por uid (`{ last, users: { [uid]: { inventory, pending, equipDirty, name, nameDirty, nextRewardAt } } }`): mostra moedas e cosméticos na hora (inclusive sem rede) com o último uid enquanto o Auth responde. Leitura tolerante.
+- **Cache** no `localStorage` em `lasertype.cloud.v1`, por uid (`{ last, users: { [uid]: { inventory, pending, bonuses, dailySettled, equipDirty, name, nameDirty, nextRewardAt } } }`): mostra moedas e cosméticos na hora (inclusive sem rede) com o último uid enquanto o Auth responde. Leitura tolerante.
 - Ao abrir: o documento do servidor vence, exceto o que ainda não foi enviado (moedas pendentes, equipar/apelido "sujos"), que é reenviado em seguida.
 - **Moedas pendentes:** saldo mostrado = confirmado + pendente. Escrita de recompensa com `min(pendente, 150)`, no mínimo 30 s (+2 s de margem, relógio local) depois da anterior ou da criação; recusada ou sem rede → continua pendente e tenta de novo com espera crescente. Moedas ganhas antes de qualquer conta responder (primeira visita sem rede) vão para a primeira conta que responder.
+- **Bônus na fila** (`bonuses` no cache, do dia mais antigo ao mais novo): vão antes das moedas pendentes, no mesmo ritmo de 30 s; se um falha, as moedas passam na frente na vez seguinte (um bônus nunca as bloqueia).
 - Equipar e apelido aparecem na hora e são reenviados quando a conexão volta. Sem rede, a compra responde "sem conexão" (compras precisam do servidor).
 - `App` chama `setUser(uid)` a cada mudança de conta (`null` = conectando/sem rede: mantém o cache). Configurações continuam só locais (não há campos para elas nas regras).
 
@@ -455,7 +471,10 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Desempenho do build (2026-11-22, gzip): carga inicial ≈ 56 KB (JS 48,2 + CSS 4,9 + HTML 2,5 + `boot.css`). Firebase fora do bundle inicial, em chunks dinâmicos pedidos logo após a inicialização, sem bloquear a primeira tela: núcleo 11,4, Auth 36,6, Firestore lite 39,0, App Check 5,5 (≈ 92 KB). O script do reCAPTCHA vem do Google, também em segundo plano. Nenhum `modulepreload` do Firebase no HTML; a ativação do debug token não entra no build de produção.
   - Pendências no console: registrar o app no App Check com a chave secreta do reCAPTCHA, registrar o debug token de desenvolvimento, criar o secret `VITE_RECAPTCHA_SITE_KEY` no GitHub e, depois de conferir as métricas, aplicar a imposição no Firestore e no Authentication.
 - [x] **Arte dos canhões (fora das fases, 2026-11-22):** os 4 canhões redesenhados em camadas (§7 "Canhão"), com o mesmo tamanho e a mesma boca; giro por mola, recuo por cano, clarão/faíscas/fumaça na boca, núcleo ligado ao combo e ao EMP. Revisado com as pranchas de `npm run share:images -- --cannons` e no jogo real (Edge headless). A imagem de compartilhamento foi regerada com o canhão novo. Custo: JS inicial 48,2 → 53,3 KB gzip.
-- [ ] **Fase 7 — Extras:** Desafio Diário, boss, conquistas, coleções, suporte mobile.
+- [ ] **Fase 7 — Extras:** Desafio Diário (feito), boss, conquistas, coleções, suporte mobile.
+  - **Desafio Diário** (2026-11-22; §6 Modos, §8 "Bônus do Desafio Diário", §9 Ranking): modo `daily`, envio com `mode` 'daily' e `day = dayIndex()`, aba "Diário", contagem no card do menu e no ranking, bônus por posição. `firestore.rules` não mudou.
+  - Testado com servidores falsos que aplicam os limites das regras, com o `App` completo no Edge headless (virada do dia com a tela aberta e no meio da partida, data do aparelho errada, dois bônus em sequência, fora do top 50, anônimo, build offline, 360 px) e conferindo o que o SDK do Firestore envia (com `fetch` simulado). Não testado contra o Firebase real.
+  - Junto: o menu mais alto que a tela (celular) rola desde o topo (`justify-content: safe center`); antes, conta e saldo ficavam inalcançáveis.
 
 ---
 

@@ -39,6 +39,8 @@ export interface RadioOption<T extends string> {
   readonly value: T;
   readonly label: string;
   readonly description?: string;
+  /** Extra line under the description (the caller keeps it up to date). */
+  readonly note?: HTMLElement;
 }
 
 /**
@@ -69,6 +71,7 @@ export function radioGroup<T extends string>(
     const body = el('span', 'choice__body');
     body.append(el('span', 'choice__label', option.label));
     if (option.description) body.append(el('span', 'choice__desc', option.description));
+    if (option.note) body.append(option.note);
     label.append(input, body);
     items.append(label);
   }

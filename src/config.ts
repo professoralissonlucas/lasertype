@@ -1,5 +1,5 @@
 // Balancing constants. Every gameplay number lives here, never inline.
-import type { EconomyConfig, SyncConfig } from './economy/types.ts';
+import type { DailyBonusConfig, EconomyConfig, SyncConfig } from './economy/types.ts';
 import type { RankingConfig } from './firebase/types.ts';
 import type {
   ComboConfig,
@@ -115,9 +115,28 @@ const ECONOMY: EconomyConfig = {
   pointsPerCoin: 100,
   maxScoreCoins: 80,
   gradeBonus: { S: 20, A: 10, B: 5, C: 0, D: 0 },
-  modeFactor: { survival: 1, timeAttack: 1, zen: 0.25 },
+  modeFactor: { survival: 1, timeAttack: 1, daily: 1, zen: 0.25 },
   rarityPrice: { common: 300, rare: 900, epic: 2500, legendary: 6000 },
   shopSize: 4,
+};
+
+/**
+ * Daily Challenge bonus, paid once the day closed (its board is final then: the rules only
+ * accept today's scores). Every amount fits in one reward write (sync.maxRewardPerWrite).
+ */
+const DAILY_BONUS: DailyBonusConfig = {
+  lang: 'pt-BR',
+  minScore: 1000,
+  lookbackDays: 7,
+  settleMinutes: 5,
+  tiers: [
+    { maxPosition: 1, coins: 150 },
+    { maxPosition: 2, coins: 120 },
+    { maxPosition: 3, coins: 100 },
+    { maxPosition: 10, coins: 70 },
+    { maxPosition: 25, coins: 40 },
+    { maxPosition: 50, coins: 20 },
+  ],
 };
 
 /**
@@ -169,6 +188,7 @@ export const CONFIG = {
   difficulty: DIFFICULTY,
   grading: GRADING,
   economy: ECONOMY,
+  dailyBonus: DAILY_BONUS,
   sync: SYNC,
   ranking: RANKING,
 } as const;

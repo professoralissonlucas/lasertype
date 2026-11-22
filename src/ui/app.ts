@@ -4,30 +4,32 @@
 import type { AudioEngine } from '../audio/AudioEngine.ts';
 import { resolveCosmetics } from '../cosmetics/equip.ts';
 import type { ResolvedCosmetics } from '../cosmetics/types.ts';
+import type { DailyBonus } from '../economy/dailyBonus.ts';
+import { DailyBonusCollector } from '../economy/DailyBonusCollector.ts';
 import { Economy } from '../economy/Economy.ts';
 import type { FirestoreInventoryRepository } from '../economy/firestoreRepository.ts';
 import { sameEquipped } from '../economy/inventory.ts';
 import type { InventoryRepository } from '../economy/repository.ts';
 import type { AuthService, LinkOutcome } from '../firebase/auth.ts';
 import { isRankedMode, type Leaderboard, type MatchResult, type SubmitResult, type Submitter } from '../firebase/leaderboard.ts';
-import type { Board } from '../firebase/types.ts';
 import { Game, type GameView, type MatchConfig } from '../game/Game.ts';
 import { buildReport, type MatchReport } from '../game/report.ts';
 import type { MatchState } from '../game/state.ts';
 import { MODES } from '../modes/index.ts';
 import { defaultNickname } from '../profile/nickname.ts';
 import { saveSettings, type Settings } from '../settings/settings.ts';
-import { createIntegerFormatter } from '../utils/format.ts';
+import { createIntegerFormatter, formatGameDay } from '../utils/format.ts';
 import type { KeyValueStore } from '../utils/storage.ts';
 import type { Language } from '../words/types.ts';
 import { AccountBadge, type AccountCallbacks } from './account.ts';
+import { dailyPlaceText } from './dailyText.ts';
 import { el } from './dom.ts';
 import { Hud } from './hud.ts';
 import { createTranslator, type Translate } from './i18n.ts';
 import { MenuScreen, type MenuChoice } from './menu.ts';
 import { NicknameDialog } from './nicknameDialog.ts';
 import { PauseScreen } from './pause.ts';
-import { RankingScreen } from './ranking.ts';
+import { RankingScreen, type RankingChoice } from './ranking.ts';
 import { ReportScreen, type RankingLine } from './report.ts';
 import { SettingsScreen } from './settings.ts';
 import { ShopScreen } from './shop.ts';
@@ -82,6 +84,9 @@ export class App {
   private readonly authService: AuthService;
   private readonly leaderboardService: Leaderboard;
   private readonly cloudSync: FirestoreInventoryRepository | null;
+  private readonly bonusCollector: DailyBonusCollector | null;
+  /** Daily Challenge bonuses paid during a match, announced when it ends. */
+  private paidBonuses: readonly DailyBonus[] = [];
   private readonly recaptchaNotice: boolean;
   private readonly toasts = new Toasts();
   private settings: Settings;
@@ -103,6 +108,7 @@ export class App {
     this.authService = options.auth;
     this.leaderboardService = options.leaderboard;
     this.cloudSync = options.cloud;
+    this.bonusCollector = options.cloud && new DailyBonusCollector(options.cloud, options.leaderboard);
     this.recaptchaNotice = options.recaptchaNotice;
     this.matchLang = options.settings.language;
     this.t = createTranslator(this.settings.language);
@@ -128,8 +134,16 @@ export class App {
     });
     this.screens = this.buildScreens();
     this.authService.subscribe(() => this.onAccountChange());
-    // users/{uid} answered (nickname loaded or edited, account switched): refresh the badges.
-    this.cloudSync?.subscribe(() => this.refreshAccount());
+    // users/{uid} answered (nickname loaded or edited, account switched): refresh the badges and
+    // look for Daily Challenge bonuses.
+    this.cloudSync?.subscribe(() => {
+      this.refreshAccount();
+      this.collectBonuses();
+    });
+    this.cloudSync?.subscribeBonus((bonus) => {
+      this.paidBonuses = [...this.paidBonuses, bonus];
+      this.announceBonuses();
+    });
     this.applySettings();
   }
 
@@ -200,6 +214,7 @@ export class App {
         report.show(summary, reward, this.economyInstance.coins);
         this.reportShown = true;
         this.submitMatch(summary);
+        this.announceBonuses();
       }
     } else if (this.reportShown) {
       report.hide();
@@ -216,6 +231,7 @@ export class App {
         mode: summary.mode,
         difficulty: summary.difficulty,
         lang: this.matchLang,
+        day: summary.day,
         score: summary.score,
         wpm: summary.wpm,
         accuracy: summary.accuracy,
@@ -238,7 +254,7 @@ export class App {
     void this.leaderboardService.submit(finished.match, this.submitter()).then((outcome) => {
       if (finished.serial !== this.matchSerial || !this.reportShown) return;
       finished.outcome = outcome;
-      this.screens.report.setRanking(this.rankingLine(outcome));
+      this.screens.report.setRanking(this.rankingLine(outcome, finished.match));
     });
   }
 
@@ -248,7 +264,7 @@ export class App {
     return { uid, google: status === 'google', name: this.nickname(uid) };
   }
 
-  private rankingLine(outcome: SubmitResult): RankingLine | null {
+  private rankingLine(outcome: SubmitResult, match: MatchResult): RankingLine | null {
     const t = this.t;
     switch (outcome.kind) {
       case 'unavailable':
@@ -263,13 +279,44 @@ export class App {
         };
       case 'invalid':
         return { text: t('reportRankInvalid'), tone: 'info', signIn: false };
-      case 'notRecord':
-        return { text: t('reportRankNotRecord', { n: this.formatScore(outcome.best) }), tone: 'info', signIn: false };
-      case 'record':
-        return { text: t('reportRankRecord'), tone: 'record', signIn: false };
+      case 'dayOver':
+        return { text: t('reportRankDayOver'), tone: 'info', signIn: false };
+      case 'refused':
+        return { text: t('reportRankRefused'), tone: 'error', signIn: false };
+      case 'notRecord': {
+        const best = t('reportRankNotRecord', { n: this.formatScore(outcome.best) });
+        return { text: best + this.placeToday(outcome.position, outcome.best, match), tone: 'info', signIn: false };
+      }
+      case 'record': {
+        const place = this.placeToday(outcome.position, match.score, match);
+        return { text: t('reportRankRecord') + place, tone: 'record', signIn: false };
+      }
       case 'error':
         return { text: t('reportRankError'), tone: 'error', signIn: false };
     }
+  }
+
+  /** Daily Challenge: the place today, to follow the result ('' in other modes or when unknown). */
+  private placeToday(position: number | null, score: number, match: MatchResult): string {
+    return position === null ? '' : ` ${dailyPlaceText(this.t, this.formatScore, position, score, match.lang)}`;
+  }
+
+  // ---------- Daily Challenge bonus ----------
+
+  /** Closed days of a Google account (only those enter the ranking). Cheap once they are settled. */
+  private collectBonuses(): void {
+    if (this.authService.account.status === 'google') void this.bonusCollector?.collect();
+  }
+
+  /** Announces the bonuses the server paid, never over a running match. */
+  private announceBonuses(): void {
+    if (this.paidBonuses.length === 0 || (this.screen === 'match' && !this.reportShown)) return;
+    for (const { day, position, coins } of this.paidBonuses) {
+      const date = formatGameDay(day, this.settings.language);
+      this.toasts.show(this.t('dailyPaid', { date, n: position, coins: this.formatScore(coins) }));
+    }
+    this.paidBonuses = [];
+    this.audio.play('purchase');
   }
 
   // ---------- Account ----------
@@ -347,6 +394,7 @@ export class App {
     // The economy follows the signed-in account (its own users/{uid}).
     this.cloudSync?.setUser(this.authService.account.uid);
     this.refreshAccount();
+    this.collectBonuses();
   }
 
   private refreshAccount(): void {
@@ -357,7 +405,7 @@ export class App {
     // A report waiting on "Entrar com Google" shows the button only while it can work.
     const finished = this.finished;
     if (this.reportShown && finished?.outcome?.kind === 'signIn') {
-      this.screens.report.setRanking(this.rankingLine(finished.outcome));
+      this.screens.report.setRanking(this.rankingLine(finished.outcome, finished.match));
     }
   }
 
@@ -376,7 +424,11 @@ export class App {
       report.hide();
       this.reportShown = false;
     }
-    if (screen === 'menu') menu.focus();
+    if (screen === 'menu') {
+      menu.focus();
+      this.collectBonuses(); // the day may have turned since the last time
+    }
+    this.announceBonuses();
     if (screen === 'settings') settings.focus();
     if (screen === 'shop') shop.focus();
     if (screen === 'ranking') ranking.focus();
@@ -387,11 +439,12 @@ export class App {
     if (document.activeElement instanceof HTMLElement) document.activeElement.blur();
     this.show('match');
     const s = this.settings;
+    const mode = MODES[s.mode];
     this.matchLang = s.language;
     const config: MatchConfig = {
       lang: s.language,
-      mode: MODES[s.mode],
-      difficulty: s.difficulty,
+      mode,
+      difficulty: mode.fixedDifficulty ?? s.difficulty,
       seed: this.seed,
       requireAccents: s.requireAccents,
       reduceEffects: s.reduceEffects,
@@ -430,9 +483,9 @@ export class App {
   }
 
   /** The ranking opens on the menu's choices (Zen has no ranking: Survival instead). */
-  private initialBoard(): Board {
+  private initialRanking(): RankingChoice {
     const { mode, difficulty, language } = this.settings;
-    return { mode: isRankedMode(mode) ? mode : 'survival', diff: difficulty, lang: language, day: 0 };
+    return { mode: isRankedMode(mode) ? mode : 'survival', diff: difficulty, lang: language };
   }
 
   private buildScreens(): Screens {
@@ -489,11 +542,12 @@ export class App {
       }),
       ranking: new RankingScreen({
         t,
+        language: this.settings.language,
         formatNumber: formatScore,
         leaderboard: this.leaderboardService,
         account: () => this.authService.account,
         accountBadge: rankingAccount,
-        initial: this.initialBoard(),
+        initial: this.initialRanking(),
         onBack: () => this.show('menu'),
       }),
       nickname: new NicknameDialog(t),

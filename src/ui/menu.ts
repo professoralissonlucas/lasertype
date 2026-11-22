@@ -1,7 +1,12 @@
 // Main menu: mode, difficulty and language, then Play. Enter anywhere in the form plays.
+// The Daily Challenge card counts down to the next one and locks the difficulty (the player's
+// own choice comes back with the other modes).
 // Also shows the coin balance and the account, and leads to the shop, ranking and settings.
 import { GAME_DIFFICULTIES, type GameDifficulty } from '../game/types.ts';
+import { MODES } from '../modes/index.ts';
 import { MODE_IDS, type ModeId } from '../modes/types.ts';
+import { msUntilNextDay } from '../utils/day.ts';
+import { formatCountdown } from '../utils/format.ts';
 import { LANGUAGES, type Language } from '../words/types.ts';
 import { button, el, externalLink, radioGroup } from './dom.ts';
 import { DIFFICULTY_LABEL, LANGUAGE_NAME, MODE_DESCRIPTION, MODE_LABEL, type Translate } from './i18n.ts';
@@ -19,6 +24,9 @@ export interface MenuCallbacks {
   onShop(): void;
   onRanking(): void;
 }
+
+/** Countdown refresh. */
+const TICK_MS = 1000;
 
 const GOOGLE_PRIVACY = 'https://policies.google.com/privacy';
 const GOOGLE_TERMS = 'https://policies.google.com/terms';
@@ -42,6 +50,9 @@ export class MenuScreen {
   private readonly formatNumber: (value: number) => string;
   private readonly wallet: HTMLElement;
   private readonly walletValue: HTMLElement;
+  private readonly difficulty: HTMLFieldSetElement;
+  private readonly countdown = el('span', 'choice__note');
+  private tickTimer: number | null = null;
 
   constructor(
     t: Translate,
@@ -75,6 +86,7 @@ export class MenuScreen {
     this.form = form;
     const update = (patch: Partial<MenuChoice>): void => {
       this.choice = { ...this.choice, ...patch };
+      this.syncDifficulty();
       callbacks.onChange(this.choice);
     };
 
@@ -82,11 +94,16 @@ export class MenuScreen {
       'choice--cards',
       t('menuMode'),
       'mode',
-      MODE_IDS.map((id) => ({ value: id, label: t(MODE_LABEL[id]), description: t(MODE_DESCRIPTION[id]) })),
+      MODE_IDS.map((id) => ({
+        value: id,
+        label: t(MODE_LABEL[id]),
+        description: t(MODE_DESCRIPTION[id]),
+        ...(id === 'daily' && { note: this.countdown }),
+      })),
       initial.mode,
       (mode) => update({ mode }),
     );
-    const difficulty = radioGroup(
+    this.difficulty = radioGroup(
       'choice--segmented',
       t('menuDifficulty'),
       'difficulty',
@@ -103,7 +120,8 @@ export class MenuScreen {
       (value) => update({ language: value }),
     );
     const row = el('div', 'menu__row');
-    row.append(difficulty, language);
+    row.append(this.difficulty, language);
+    this.syncDifficulty();
 
     this.playButton = el('button', 'btn btn--primary btn--large');
     this.playButton.type = 'submit';
@@ -134,8 +152,29 @@ export class MenuScreen {
 
   setVisible(visible: boolean): void {
     this.root.hidden = !visible;
-    if (visible) window.addEventListener('keydown', this.onKeyDown);
-    else window.removeEventListener('keydown', this.onKeyDown);
+    if (this.tickTimer !== null) window.clearInterval(this.tickTimer);
+    this.tickTimer = null;
+    if (visible) {
+      window.addEventListener('keydown', this.onKeyDown);
+      this.tickTimer = window.setInterval(this.tick, TICK_MS);
+      this.tick();
+    } else {
+      window.removeEventListener('keydown', this.onKeyDown);
+    }
+  }
+
+  private readonly tick = (): void => {
+    this.countdown.textContent = this.t('dailyNext', { time: formatCountdown(msUntilNextDay(Date.now())) });
+  };
+
+  /** Modes with a fixed difficulty show it, locked; `choice.difficulty` stays as the player left it. */
+  private syncDifficulty(): void {
+    const fixed = MODES[this.choice.mode].fixedDifficulty;
+    const shown = fixed ?? this.choice.difficulty;
+    this.difficulty.disabled = fixed !== null;
+    for (const input of this.difficulty.querySelectorAll('input')) input.checked = input.value === shown;
+    const legend = this.difficulty.querySelector('legend');
+    if (legend) legend.textContent = this.t(fixed === null ? 'menuDifficulty' : 'menuDifficultyFixed');
   }
 
   /**

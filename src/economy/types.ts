@@ -4,6 +4,7 @@
 import type { CosmeticType, Rarity } from '../cosmetics/types.ts';
 import type { Grade } from '../game/types.ts';
 import type { ModeId } from '../modes/types.ts';
+import type { Language } from '../words/types.ts';
 
 /** Missing type = the default item of that category. */
 export type Equipped = Readonly<Partial<Record<CosmeticType, string>>>;
@@ -88,6 +89,20 @@ export interface EconomyConfig {
   readonly rarityPrice: Readonly<Record<Rarity, number>>;
   /** Items in the daily shop (one of them discounted). */
   readonly shopSize: number;
+}
+
+/** Coins for the final place in a Daily Challenge (economy/dailyBonus.ts). */
+export interface DailyBonusConfig {
+  /** The board that pays: the challenge exists in every language, the bonus only in this one. */
+  readonly lang: Language;
+  /** A score below this earns no bonus (opening and quitting must not pay). */
+  readonly minScore: number;
+  /** A closed day can still be collected this many days later. */
+  readonly lookbackDays: number;
+  /** A day counts as closed this long after it turned (scores in flight, clocks a bit off). */
+  readonly settleMinutes: number;
+  /** Best places first: places up to `maxPosition` earn `coins`; below the last tier, nothing. */
+  readonly tiers: readonly { readonly maxPosition: number; readonly coins: number }[];
 }
 
 /** Cloud sync timing (the reward limits mirror firestore.rules → isReward). */

@@ -1,9 +1,13 @@
 import { describe, expect, it } from 'vitest';
+import { dayIndex, dayStart } from '../utils/day.ts';
 import {
+  boardAt,
   buildScore,
+  dailyBoard,
   Leaderboard,
   MAX_POINTS_PER_SECOND,
   parseRow,
+  placesOf,
   scoreDocId,
   scoreProblems,
   type LeaderboardBackend,
@@ -16,12 +20,18 @@ const MATCH: MatchResult = {
   mode: 'survival',
   difficulty: 'normal',
   lang: 'pt-BR',
+  day: 0,
   score: 4321,
   wpm: 52.345,
   accuracy: 0.9567,
   elapsed: 95.4321,
 };
 const GOOGLE: Submitter = { uid: 'u1', google: true, name: 'PilotoAb12' };
+
+const DAY = 20779;
+/** Inside game day DAY. */
+const DURING_DAY = dayStart(DAY) + 3_600_000;
+const DAILY: MatchResult = { ...MATCH, mode: 'daily', day: DAY };
 
 function fields(patch: Partial<ScoreFields> = {}): ScoreFields {
   const base = buildScore(MATCH, 'u1', 'PilotoAb12');
@@ -52,8 +62,9 @@ describe('buildScore', () => {
     });
   });
 
-  it('keeps the day only when given (daily mode, Phase 7)', () => {
-    expect(buildScore(MATCH, 'u1', 'PilotoAb12', 20779)?.day).toBe(20779);
+  it('keeps the day of a Daily Challenge; the other modes always use 0', () => {
+    expect(buildScore(DAILY, 'u1', 'PilotoAb12')).toMatchObject({ mode: 'daily', diff: 'normal', day: DAY });
+    expect(buildScore({ ...MATCH, day: DAY }, 'u1', 'PilotoAb12')?.day).toBe(0);
   });
 
   it('Zen has no ranking', () => {
@@ -122,14 +133,21 @@ class FakeBackend implements LeaderboardBackend {
   saves = 0;
   topCalls = 0;
   fail = false;
+  failCount = false;
+  /** The rules refuse every write. */
+  refuse = false;
+  /** Doc ids asked for (bestScore / row). */
+  readonly reads: string[] = [];
 
   async bestScore(id: string): Promise<number | null> {
     if (this.fail) throw new Error('offline');
+    this.reads.push(id);
     return this.docs.get(id)?.score ?? null;
   }
 
   async save(id: string, data: ScoreFields): Promise<void> {
     if (this.fail) throw new Error('offline');
+    if (this.refuse) throw Object.assign(new Error('denied'), { code: 'permission-denied' });
     this.saves++;
     this.docs.set(id, data);
   }
@@ -137,13 +155,24 @@ class FakeBackend implements LeaderboardBackend {
   async top(board: Board, size: number): Promise<RankRow[]> {
     this.topCalls++;
     if (this.fail) throw new Error('offline');
-    return [...this.docs.values()]
-      .filter((d) => d.mode === board.mode && d.diff === board.diff && d.lang === board.lang && d.day === board.day)
+    return this.on(board)
       .sort((a, b) => b.score - a.score)
       .slice(0, size);
   }
 
+  async countAbove(board: Board, score: number): Promise<number> {
+    if (this.fail || this.failCount) throw new Error('offline');
+    return this.on(board).filter((d) => d.score > score).length;
+  }
+
+  private on(board: Board): ScoreFields[] {
+    return [...this.docs.values()].filter(
+      (d) => d.mode === board.mode && d.diff === board.diff && d.lang === board.lang && d.day === board.day,
+    );
+  }
+
   async row(id: string): Promise<RankRow | null> {
+    this.reads.push(id);
     return this.docs.get(id) ?? null;
   }
 }
@@ -175,17 +204,17 @@ describe('Leaderboard.submit', () => {
 
   it('saves the first score under the rules id', async () => {
     const { board, backend } = setup();
-    expect(await board.submit(MATCH, GOOGLE)).toEqual({ kind: 'record', previous: null });
+    expect(await board.submit(MATCH, GOOGLE)).toEqual({ kind: 'record', previous: null, position: null });
     expect(backend.docs.get('u1_survival_normal_pt-BR_0')?.score).toBe(4321);
   });
 
   it('only sends when the record is beaten', async () => {
     const { board, backend } = setup();
     await board.submit(MATCH, GOOGLE);
-    expect(await board.submit({ ...MATCH, score: 4321 }, GOOGLE)).toEqual({ kind: 'notRecord', best: 4321 });
-    expect(await board.submit({ ...MATCH, score: 100 }, GOOGLE)).toEqual({ kind: 'notRecord', best: 4321 });
+    expect(await board.submit({ ...MATCH, score: 4321 }, GOOGLE)).toEqual({ kind: 'notRecord', best: 4321, position: null });
+    expect(await board.submit({ ...MATCH, score: 100 }, GOOGLE)).toEqual({ kind: 'notRecord', best: 4321, position: null });
     expect(backend.saves).toBe(1);
-    expect(await board.submit({ ...MATCH, score: 5000 }, GOOGLE)).toEqual({ kind: 'record', previous: 4321 });
+    expect(await board.submit({ ...MATCH, score: 5000 }, GOOGLE)).toEqual({ kind: 'record', previous: 4321, position: null });
     expect(backend.saves).toBe(2);
   });
 
@@ -209,6 +238,87 @@ describe('Leaderboard.submit', () => {
     backend.fail = true;
     expect(await board.submit(MATCH, GOOGLE)).toEqual({ kind: 'error' });
     expect(await new Leaderboard(() => Promise.reject(new Error('no sdk'))).submit(MATCH, GOOGLE)).toEqual({ kind: 'error' });
+  });
+});
+
+describe('Daily Challenge boards', () => {
+  it('boardAt: today, always on Normal; the other modes keep the filters and day 0', () => {
+    expect(boardAt('daily', 'hard', 'en', DURING_DAY)).toEqual({ mode: 'daily', diff: 'normal', lang: 'en', day: DAY });
+    expect(boardAt('daily', 'hard', 'en', DURING_DAY)).toEqual(dailyBoard('en', dayIndex(DURING_DAY)));
+    expect(boardAt('survival', 'hard', 'en', DURING_DAY)).toEqual({ mode: 'survival', diff: 'hard', lang: 'en', day: 0 });
+  });
+
+  it('placesOf: ties share a place and the next one skips', () => {
+    expect(placesOf([{ score: 90 }, { score: 70 }, { score: 70 }, { score: 10 }])).toEqual([1, 2, 2, 4]);
+    expect(placesOf([])).toEqual([]);
+  });
+});
+
+describe('Leaderboard.submit — Daily Challenge', () => {
+  it('saves under the day the match started and tells the place today', async () => {
+    const { board, backend } = setup(DURING_DAY);
+    await board.submit({ ...DAILY, score: 9000 }, { ...GOOGLE, uid: 'u2' });
+    await board.submit({ ...DAILY, score: 8000 }, { ...GOOGLE, uid: 'u3' });
+    expect(await board.submit(DAILY, GOOGLE)).toEqual({ kind: 'record', previous: null, position: 3 });
+    expect(backend.docs.get(`u1_daily_normal_pt-BR_${DAY}`)).toMatchObject({ mode: 'daily', diff: 'normal', day: DAY });
+  });
+
+  it('a worse attempt keeps the record and tells the place of the record', async () => {
+    const { board } = setup(DURING_DAY);
+    await board.submit({ ...DAILY, score: 9000 }, { ...GOOGLE, uid: 'u2' });
+    await board.submit({ ...DAILY, score: 10_000 }, GOOGLE);
+    expect(await board.submit({ ...DAILY, score: 50 }, GOOGLE)).toEqual({ kind: 'notRecord', best: 10_000, position: 1 });
+  });
+
+  it('each language is its own board', async () => {
+    const { board } = setup(DURING_DAY);
+    await board.submit({ ...DAILY, score: 9000 }, { ...GOOGLE, uid: 'u2' });
+    expect(await board.submit({ ...DAILY, lang: 'en', score: 10 }, GOOGLE)).toMatchObject({ kind: 'record', position: 1 });
+  });
+
+  it('is not sent once its day is over, not even to the new day', async () => {
+    const { board, backend, advance } = setup(DURING_DAY);
+    advance(24 * 3_600_000);
+    expect(await board.submit(DAILY, GOOGLE)).toEqual({ kind: 'dayOver' });
+    // Nor does it ask for a sign-in that could no longer help.
+    expect(await board.submit(DAILY, null)).toEqual({ kind: 'dayOver' });
+    expect(backend.saves).toBe(0);
+  });
+
+  it('turns exactly at 03:00 UTC', async () => {
+    const { board, advance } = setup(dayStart(DAY + 1) - 1);
+    expect((await board.submit(DAILY, GOOGLE)).kind).toBe('record');
+    advance(1);
+    expect((await board.submit({ ...DAILY, score: 5000 }, GOOGLE)).kind).toBe('dayOver');
+  });
+
+  it('a write refused by the rules (wrong device date) is reported as such', async () => {
+    const { board, backend } = setup(DURING_DAY);
+    backend.refuse = true;
+    expect(await board.submit(DAILY, GOOGLE)).toEqual({ kind: 'refused' });
+    expect(await board.submit(MATCH, GOOGLE)).toEqual({ kind: 'error' }); // other modes: unchanged
+  });
+
+  it('an unknown place does not spoil the record', async () => {
+    const { board, backend } = setup(DURING_DAY);
+    backend.failCount = true;
+    expect(await board.submit(DAILY, GOOGLE)).toEqual({ kind: 'record', previous: null, position: null });
+  });
+});
+
+describe('Leaderboard.position', () => {
+  it('is 1 + how many scored more, beyond the top 50 too', async () => {
+    const { board, backend } = setup(DURING_DAY);
+    for (let i = 0; i < 60; i++) {
+      await board.submit({ ...DAILY, score: 10_000 + i }, { ...GOOGLE, uid: `p${i}` });
+    }
+    expect(backend.docs.size).toBe(60);
+    expect(await board.position(dailyBoard('pt-BR', DAY), 4321)).toBe(61);
+    expect(await board.position(dailyBoard('pt-BR', DAY), 10_059)).toBe(1);
+  });
+
+  it('is null in an offline build', async () => {
+    expect(await new Leaderboard(null).position(dailyBoard('pt-BR', DAY), 1)).toBeNull();
   });
 });
 

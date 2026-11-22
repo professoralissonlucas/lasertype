@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { LANGUAGES } from '../words/types.ts';
 import { CombatLogModel } from './combatLog.ts';
+import { dailyPlaceText } from './dailyText.ts';
 import { createTranslator, interpolate, STRING_KEYS } from './i18n.ts';
 
 describe('i18n', () => {
@@ -27,6 +28,28 @@ describe('i18n', () => {
         expect(placeholders(t(key)), `${lang}.${key}`).toEqual(placeholders(pt(key)));
       }
     }
+  });
+});
+
+describe('dailyPlaceText', () => {
+  const pt = createTranslator('pt-BR');
+  const en = createTranslator('en');
+
+  it('tells the place and the bonus it would pay', () => {
+    expect(dailyPlaceText(pt, String, 3, 5000, 'pt-BR')).toBe('Você está em 3º hoje. +100 moedas se terminar assim.');
+    expect(dailyPlaceText(en, String, 1, 5000, 'pt-BR')).toBe('You are #1 today. +150 coins if it ends like this.');
+  });
+
+  it('only the place when there is no bonus (place, score or language)', () => {
+    for (const text of [
+      dailyPlaceText(pt, String, 51, 5000, 'pt-BR'),
+      dailyPlaceText(pt, String, 51, 10, 'pt-BR'),
+      dailyPlaceText(pt, String, 51, 5000, 'en'),
+    ]) {
+      expect(text).toBe('Você está em 51º hoje.');
+    }
+    expect(dailyPlaceText(pt, String, 1, 5000, 'en')).toBe('Você está em 1º hoje.');
+    expect(dailyPlaceText(pt, String, 1, 10, 'pt-BR')).toBe('Você está em 1º hoje.');
   });
 });
 

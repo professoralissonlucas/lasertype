@@ -7,6 +7,8 @@ import type { EndReason, GameDifficulty, Grade } from './types.ts';
 export interface MatchReport {
   readonly mode: ModeId;
   readonly difficulty: GameDifficulty;
+  /** Game day of a Daily Challenge, 0 in the other modes. */
+  readonly day: number;
   readonly endReason: EndReason;
   readonly score: number;
   readonly grade: Grade;
@@ -34,6 +36,7 @@ export function buildReport(state: Readonly<MatchState>): MatchReport {
   return {
     mode: state.mode.id,
     difficulty: state.difficulty,
+    day: state.day,
     endReason: state.endReason ?? 'quit',
     score: state.score,
     grade: gradeFor({ accuracy, wpm, defense, destroyed: stats.destroyed }),

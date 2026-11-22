@@ -2,6 +2,7 @@
 // is created once (coins 0, xp 0, owned {}, lastReward = request.time) and every later write
 // is exactly ONE of the rules' update kinds, carrying only that kind's fields:
 //   reward    coins, lastReward               (the rules also allow xp, level, stats, streak, lastLogin)
+//             + stats.dailyDay for a Daily Challenge bonus (in a transaction: never paid twice)
 //   purchase  coins, owned.<id>, lastPurchase (in a transaction: the price must be exact)
 //   equip     equipped
 //   profile   name                            (photo is never sent: no Google photo)
@@ -21,6 +22,8 @@ export interface UserSnapshot {
   readonly name: string | null;
   /** Server time of the last reward write (or of the creation) in ms; null when unknown. */
   readonly lastReward: number | null;
+  /** stats.dailyDay: last game day whose Daily Challenge bonus was paid; null = none yet. */
+  readonly dailyDay: number | null;
 }
 
 /** Fields of a new users/{uid}. `now` is serverTimestamp() (rules: lastReward == request.time). */
@@ -57,6 +60,19 @@ export function newUserFields<T>(name: string, now: T): NewUserFields<T> {
 /** Reward write: the new balance and lastReward = serverTimestamp(). */
 export function rewardFields<T>(coins: number, amount: number, now: T): { readonly coins: number; readonly lastReward: T } {
   return { coins: coins + amount, lastReward: now };
+}
+
+/**
+ * Daily Challenge bonus: a reward write that also records the day paid (a field path, so the
+ * rest of `stats` is untouched). Both land in the same write, so a day is never paid twice.
+ */
+export function dailyBonusFields<T>(
+  coins: number,
+  amount: number,
+  day: number,
+  now: T,
+): { readonly coins: number; readonly lastReward: T; readonly 'stats.dailyDay': number } {
+  return { ...rewardFields(coins, amount, now), 'stats.dailyDay': day };
 }
 
 const SAFE_ID = /^[A-Za-z0-9_]+$/;
@@ -98,7 +114,13 @@ export function parseUserDoc(data: unknown): UserSnapshot {
   const d = isRecord(data) ? data : {};
   const inventory = parseInventory({ coins: d.coins, owned: d.owned, equipped: d.equipped, lastPurchase: d.lastPurchase });
   const name = typeof d.name === 'string' && isValidNickname(d.name) ? d.name : null;
-  return { inventory, name, lastReward: timestampMillis(d.lastReward) };
+  const dailyDay = isRecord(d.stats) ? d.stats.dailyDay : null;
+  return {
+    inventory,
+    name,
+    lastReward: timestampMillis(d.lastReward),
+    dailyDay: typeof dailyDay === 'number' && Number.isInteger(dailyDay) ? dailyDay : null,
+  };
 }
 
 export interface OpenedUser {
@@ -113,12 +135,20 @@ export interface PurchaseAttempt {
   readonly snapshot: UserSnapshot;
 }
 
+export interface DailyBonusAttempt {
+  /** 'alreadyPaid': this day (or a later one) was paid before, e.g. on another device. */
+  readonly kind: 'paid' | 'alreadyPaid';
+  readonly snapshot: UserSnapshot;
+}
+
 /** What the cloud repository needs from Firestore (lets tests use a fake). */
 export interface UserBackend {
   /** Reads users/{uid}, creating it first when missing (one transaction). */
   open(uid: string, name: string): Promise<OpenedUser>;
   /** Reward write (transaction): adds `amount` coins. Resolves with the document after it. */
   reward(uid: string, amount: number): Promise<UserSnapshot>;
+  /** Reward write (transaction) with the Daily Challenge bonus of `day`, unless already paid. */
+  dailyBonus(uid: string, day: number, amount: number): Promise<DailyBonusAttempt>;
   /** Purchase write (transaction), checked against the server's coins and items. */
   purchase(uid: string, itemId: string, price: number): Promise<PurchaseAttempt>;
   /** Equip write. */
@@ -137,7 +167,7 @@ export function firestoreUserBackend(sdk: FirebaseSdk): UserBackend {
         const snap = await tx.get(ref(uid));
         if (snap.exists()) return { snapshot: parseUserDoc(snap.data()), created: false };
         tx.set(ref(uid), newUserFields(name, dbApi.serverTimestamp()));
-        return { snapshot: { inventory: emptyInventory(), name, lastReward: null }, created: true };
+        return { snapshot: { inventory: emptyInventory(), name, lastReward: null, dailyDay: null }, created: true };
       }),
     reward: (uid, amount) =>
       dbApi.runTransaction(db, async (tx): Promise<UserSnapshot> => {
@@ -147,6 +177,17 @@ export function firestoreUserBackend(sdk: FirebaseSdk): UserBackend {
         const fields = rewardFields(before.inventory.coins, amount, dbApi.serverTimestamp());
         tx.update(ref(uid), fields);
         return { ...before, inventory: { ...before.inventory, coins: fields.coins }, lastReward: null };
+      }),
+    dailyBonus: (uid, day, amount) =>
+      dbApi.runTransaction(db, async (tx): Promise<DailyBonusAttempt> => {
+        const snap = await tx.get(ref(uid));
+        if (!snap.exists()) throw missing();
+        const before = parseUserDoc(snap.data());
+        if (before.dailyDay !== null && before.dailyDay >= day) return { kind: 'alreadyPaid', snapshot: before };
+        const fields = dailyBonusFields(before.inventory.coins, amount, day, dbApi.serverTimestamp());
+        tx.update(ref(uid), fields);
+        const inventory: Inventory = { ...before.inventory, coins: fields.coins };
+        return { kind: 'paid', snapshot: { ...before, inventory, lastReward: null, dailyDay: day } };
       }),
     purchase: (uid, itemId, price) =>
       dbApi.runTransaction(db, async (tx): Promise<PurchaseAttempt> => {

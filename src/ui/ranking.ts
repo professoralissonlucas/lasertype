@@ -1,43 +1,78 @@
 // Global ranking: tabs per mode, difficulty and language filters, top 50 with the player's
 // own row highlighted (or shown below the table when outside the top). Esc returns.
-import type { Leaderboard } from '../firebase/leaderboard.ts';
+// The "Diário" tab shows today's challenge only (no difficulty filter): countdown to the next
+// one, the player's place and the coin bonus. It reloads by itself when the day turns.
+import { CONFIG } from '../config.ts';
+import { dailyPrizes } from '../economy/dailyBonus.ts';
+import { boardAt, placesOf, type Leaderboard } from '../firebase/leaderboard.ts';
 import { RANKED_MODES, type AccountState, type Board, type RankedMode, type RankRow } from '../firebase/types.ts';
-import { GAME_DIFFICULTIES } from '../game/types.ts';
-import { LANGUAGES } from '../words/types.ts';
+import { GAME_DIFFICULTIES, type GameDifficulty } from '../game/types.ts';
+import { dayIndex, msUntilNextDay } from '../utils/day.ts';
+import { formatCountdown, formatGameDay } from '../utils/format.ts';
+import { LANGUAGES, type Language } from '../words/types.ts';
 import type { AccountBadge } from './account.ts';
+import { dailyPlaceText } from './dailyText.ts';
 import { button, el, radioGroup } from './dom.ts';
 import { DIFFICULTY_LABEL, LANGUAGE_NAME, MODE_LABEL, type Translate } from './i18n.ts';
 
+/** What the player picked in the tabs and filters (the board also depends on the day). */
+export interface RankingChoice {
+  readonly mode: RankedMode;
+  readonly diff: GameDifficulty;
+  readonly lang: Language;
+}
+
 export interface RankingOptions {
   readonly t: Translate;
+  /** Interface language (dates). */
+  readonly language: Language;
   readonly formatNumber: (value: number) => string;
   readonly leaderboard: Leaderboard;
   readonly account: () => AccountState;
   readonly accountBadge: AccountBadge;
-  /** Board opened first (the menu's mode, difficulty and language). */
-  readonly initial: Board;
+  /** Opened first (the menu's mode, difficulty and language). */
+  readonly initial: RankingChoice;
   readonly onBack: () => void;
 }
 
 type View = 'loading' | 'rows' | 'empty' | 'error' | 'unavailable';
 
+/** Countdown refresh (also notices when the day turns). */
+const TICK_MS = 1000;
+
+/** The signed-in player on the board shown. */
+interface OwnPlace {
+  readonly row: RankRow;
+  readonly place: number;
+}
+
 export class RankingScreen {
   readonly root: HTMLElement;
   private readonly o: RankingOptions;
   private readonly tabs: Record<RankedMode, HTMLButtonElement>;
+  private readonly difficulty: HTMLFieldSetElement;
+  private readonly daily: HTMLElement;
+  private readonly dailyTitle: HTMLElement;
+  private readonly dailyCountdown: HTMLElement;
+  private readonly dailyOwn: HTMLElement;
+  private readonly dailyPrizes: HTMLElement;
   private readonly table: HTMLTableElement;
   private readonly body: HTMLTableSectionElement;
   private readonly ownBody: HTMLTableSectionElement;
   private readonly status: HTMLElement;
   private readonly statusText: HTMLElement;
   private readonly retryButton: HTMLButtonElement;
+  private choice: RankingChoice;
+  /** Board on screen: today's one in the daily mode. */
   private board: Board;
+  private tickTimer: number | null = null;
   /** Ignores answers to requests that were superseded (fast tab flipping). */
   private request = 0;
 
   constructor(options: RankingOptions) {
     this.o = options;
-    this.board = options.initial;
+    this.choice = options.initial;
+    this.board = this.currentBoard();
     const { t } = options;
     this.root = el('section', 'screen ranking');
     this.root.setAttribute('aria-labelledby', 'ranking-title');
@@ -58,39 +93,51 @@ export class RankingScreen {
       node.type = 'button';
       node.setAttribute('role', 'tab');
       node.setAttribute('aria-controls', 'ranking-table');
-      node.addEventListener('click', () => this.setBoard({ mode }));
+      node.addEventListener('click', () => this.setChoice({ mode }));
       return node;
     };
-    this.tabs = { survival: tab('survival'), timeAttack: tab('timeAttack') };
+    this.tabs = { survival: tab('survival'), timeAttack: tab('timeAttack'), daily: tab('daily') };
     tabList.append(...RANKED_MODES.map((mode) => this.tabs[mode]));
     tabList.addEventListener('keydown', (event) => {
       if (event.key !== 'ArrowLeft' && event.key !== 'ArrowRight') return;
       event.preventDefault();
-      const index = RANKED_MODES.indexOf(this.board.mode);
+      const index = RANKED_MODES.indexOf(this.choice.mode);
       const step = event.key === 'ArrowRight' ? 1 : -1;
       const next = RANKED_MODES[(index + step + RANKED_MODES.length) % RANKED_MODES.length] ?? 'survival';
-      this.setBoard({ mode: next });
+      this.setChoice({ mode: next });
       this.tabs[next].focus();
     });
 
+    // Daily Challenge: countdown, the player's place and the coin bonus.
+    this.daily = el('div', 'ranking__daily');
+    const dailyHead = el('div', 'ranking__daily-head');
+    this.dailyTitle = el('span', 'ranking__daily-title');
+    this.dailyCountdown = el('span', 'ranking__daily-countdown');
+    dailyHead.append(this.dailyTitle, this.dailyCountdown);
+    this.dailyOwn = el('p', 'ranking__daily-own');
+    this.dailyOwn.setAttribute('aria-live', 'polite');
+    this.dailyPrizes = el('div', 'ranking__daily-prizes');
+    this.daily.append(dailyHead, this.dailyOwn, this.dailyPrizes);
+
     // Filters.
     const filters = el('div', 'ranking__filters');
+    this.difficulty = radioGroup(
+      'choice--segmented',
+      t('menuDifficulty'),
+      'ranking-diff',
+      GAME_DIFFICULTIES.map((id) => ({ value: id, label: t(DIFFICULTY_LABEL[id]) })),
+      this.choice.diff,
+      (diff) => this.setChoice({ diff }),
+    );
     filters.append(
-      radioGroup(
-        'choice--segmented',
-        t('menuDifficulty'),
-        'ranking-diff',
-        GAME_DIFFICULTIES.map((id) => ({ value: id, label: t(DIFFICULTY_LABEL[id]) })),
-        this.board.diff,
-        (diff) => this.setBoard({ diff }),
-      ),
+      this.difficulty,
       radioGroup(
         'choice--segmented',
         t('menuLanguage'),
         'ranking-lang',
         LANGUAGES.map((id) => ({ value: id, label: LANGUAGE_NAME[id] })),
-        this.board.lang,
-        (lang) => this.setBoard({ lang }),
+        this.choice.lang,
+        (lang) => this.setChoice({ lang }),
       ),
     );
 
@@ -125,9 +172,9 @@ export class RankingScreen {
     const footer = el('div', 'panel__footer');
     footer.append(el('p', 'panel__note', t('rankingHint')), button('btn', t('back'), () => options.onBack(), 'Esc'));
 
-    panel.append(header, tabList, filters, this.table, this.status, footer);
+    panel.append(header, tabList, filters, this.daily, this.table, this.status, footer);
     this.root.append(panel);
-    this.syncTabs();
+    this.syncChoice();
   }
 
   setVisible(visible: boolean): void {
@@ -135,15 +182,18 @@ export class RankingScreen {
     this.root.hidden = !visible;
     if (visible) {
       window.addEventListener('keydown', this.onKeyDown);
+      this.tickTimer = window.setInterval(this.tick, TICK_MS);
       void this.refresh();
     } else {
       window.removeEventListener('keydown', this.onKeyDown);
+      if (this.tickTimer !== null) window.clearInterval(this.tickTimer);
+      this.tickTimer = null;
       this.request++;
     }
   }
 
   focus(): void {
-    this.tabs[this.board.mode].focus({ preventScroll: true });
+    this.tabs[this.choice.mode].focus({ preventScroll: true });
   }
 
   /** Account changed (linked, switched): re-highlight the player's row. */
@@ -151,38 +201,90 @@ export class RankingScreen {
     if (!this.root.hidden) void this.refresh();
   }
 
-  private setBoard(patch: Partial<Board>): void {
-    this.board = { ...this.board, ...patch };
-    this.syncTabs();
+  private setChoice(patch: Partial<RankingChoice>): void {
+    this.choice = { ...this.choice, ...patch };
+    this.syncChoice();
     void this.refresh();
   }
 
-  private syncTabs(): void {
-    for (const mode of RANKED_MODES) {
-      const active = mode === this.board.mode;
-      this.tabs[mode].setAttribute('aria-selected', String(active));
-      this.tabs[mode].tabIndex = active ? 0 : -1;
+  private currentBoard(): Board {
+    const { mode, diff, lang } = this.choice;
+    return boardAt(mode, diff, lang, Date.now());
+  }
+
+  private syncChoice(): void {
+    const { mode, lang } = this.choice;
+    for (const id of RANKED_MODES) {
+      const active = id === mode;
+      this.tabs[id].setAttribute('aria-selected', String(active));
+      this.tabs[id].tabIndex = active ? 0 : -1;
     }
+    this.difficulty.hidden = mode === 'daily';
+    this.daily.hidden = mode !== 'daily';
+    this.dailyPrizes.hidden = !this.o.leaderboard.available; // no server, no bonus
+    this.dailyPrizes.replaceChildren(...this.prizes(lang));
+  }
+
+  /** The bonus table or, on the boards without a bonus, which one pays it. */
+  private prizes(lang: Language): HTMLElement[] {
+    const { t, formatNumber } = this.o;
+    const { lang: paid, minScore } = CONFIG.dailyBonus;
+    if (lang !== paid) return [el('p', undefined, t('dailyPrizeLang', { lang: LANGUAGE_NAME[paid] }))];
+    const list = el('ul', 'ranking__prizes');
+    for (const { from, to, coins } of dailyPrizes()) {
+      const item = el('li', undefined, from === to ? t('dailyPrizeRank', { n: from }) : t('dailyPrizeRange', { from, to }));
+      item.append(' ', el('span', 'ranking__prize-coins', formatNumber(coins)));
+      list.append(item);
+    }
+    return [el('p', undefined, t('dailyPrizes', { min: formatNumber(minScore) })), list];
+  }
+
+  private readonly tick = (): void => {
+    if (this.choice.mode !== 'daily') return;
+    this.syncCountdown();
+    // The day turned: today's challenge is another board now.
+    if (this.board.day !== dayIndex(Date.now())) void this.refresh();
+  };
+
+  private syncCountdown(): void {
+    this.dailyCountdown.textContent = this.o.t('dailyCountdown', { time: formatCountdown(msUntilNextDay(Date.now())) });
+  }
+
+  /** The player's place and bonus forecast (hidden when not on the board). */
+  private syncOwn(own: OwnPlace | null): void {
+    const { t, formatNumber } = this.o;
+    this.dailyOwn.hidden = own === null;
+    this.dailyOwn.textContent = own ? dailyPlaceText(t, formatNumber, own.place, own.row.score, this.board.lang) : '';
   }
 
   private async refresh(retry = false): Promise<void> {
-    const { leaderboard, account } = this.o;
+    const { leaderboard, account, language } = this.o;
+    const board = this.currentBoard();
+    this.board = board;
+    this.dailyTitle.textContent = this.o.t('dailyTitle', { date: formatGameDay(board.day, language) });
+    this.syncCountdown();
+    this.syncOwn(null);
     if (!leaderboard.available) {
       this.show('unavailable');
       return;
     }
     const request = ++this.request;
-    const board = this.board;
     this.show('loading');
     if (retry) this.retryButton.blur();
     try {
       const rows = await leaderboard.top(board);
       const me = account();
       const uid = me.status === 'google' ? me.uid : null;
-      const inTop = uid !== null && rows.some((row) => row.uid === uid);
+      const places = placesOf(rows);
+      const index = uid === null ? -1 : rows.findIndex((row) => row.uid === uid);
+      const inTop = rows[index];
       const own = uid !== null && !inTop ? await leaderboard.own(board, uid) : null;
+      // Outside the top, only the Daily Challenge needs the exact place (it decides the bonus).
+      const ownPlace = own && board.mode === 'daily' ? await leaderboard.position(board, own.score) : null;
       if (request !== this.request) return;
-      this.render(rows, own, uid);
+      this.render(rows, places, own, ownPlace, uid);
+      if (inTop) this.syncOwn({ row: inTop, place: places[index] ?? index + 1 });
+      else this.syncOwn(own && ownPlace !== null ? { row: own, place: ownPlace } : null);
       this.show(rows.length === 0 && !own ? 'empty' : 'rows');
     } catch {
       if (request !== this.request) return;
@@ -190,9 +292,15 @@ export class RankingScreen {
     }
   }
 
-  private render(rows: readonly RankRow[], own: RankRow | null, uid: string | null): void {
-    this.body.replaceChildren(...rows.map((row, i) => this.row(String(i + 1), row, row.uid === uid)));
-    this.ownBody.replaceChildren(...(own ? [this.row('—', own, true)] : []));
+  private render(
+    rows: readonly RankRow[],
+    places: readonly number[],
+    own: RankRow | null,
+    ownPlace: number | null,
+    uid: string | null,
+  ): void {
+    this.body.replaceChildren(...rows.map((row, i) => this.row(String(places[i] ?? i + 1), row, row.uid === uid)));
+    this.ownBody.replaceChildren(...(own ? [this.row(ownPlace === null ? '—' : String(ownPlace), own, true)] : []));
   }
 
   private row(rank: string, data: RankRow, you: boolean): HTMLTableRowElement {

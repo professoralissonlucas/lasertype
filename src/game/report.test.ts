@@ -40,6 +40,11 @@ describe('buildReport', () => {
     expect(report.defense).toBeCloseTo(30 / 32);
   });
 
+  it('keeps the game day of a Daily Challenge (0 in the other modes)', () => {
+    expect(buildReport(createMatchState({ mode: MODES.daily, day: 20779 }))).toMatchObject({ mode: 'daily', day: 20779 });
+    expect(buildReport(createMatchState({ mode: MODES.survival })).day).toBe(0);
+  });
+
   it('grades the match', () => {
     const great = finished((s) => {
       s.elapsed = 60;

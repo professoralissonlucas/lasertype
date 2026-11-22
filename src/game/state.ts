@@ -39,6 +39,8 @@ export interface MatchState {
   readonly mode: ModeRules;
   /** Menu difficulty the match was started with (the spawner applies it; kept for reports). */
   readonly difficulty: GameDifficulty;
+  /** Game day of a Daily Challenge (the day it STARTED, even if it turns meanwhile); 0 otherwise. */
+  readonly day: number;
   /** Simulated seconds since the match started (paused time excluded). */
   elapsed: number;
   words: Word[];
@@ -59,6 +61,7 @@ export interface MatchState {
 export interface MatchOptions {
   readonly mode?: ModeRules;
   readonly difficulty?: GameDifficulty;
+  readonly day?: number;
   readonly maxShield?: number;
 }
 
@@ -68,6 +71,7 @@ export function createMatchState(options: MatchOptions = {}): MatchState {
     status: 'playing',
     mode: options.mode ?? MODES.survival,
     difficulty: options.difficulty ?? 'normal',
+    day: options.day ?? 0,
     elapsed: 0,
     words: [],
     lockedId: null,

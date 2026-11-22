@@ -12,8 +12,8 @@ import { GAME_DIFFICULTIES } from '../game/types.ts';
 import { DAY_MS, DAY_START_OFFSET_MS } from '../utils/day.ts';
 import { longestWordLength } from '../words/index.ts';
 import { LANGUAGES } from '../words/types.ts';
-import { buildScore, MAX_POINTS_PER_SECOND, scoreDocId } from './leaderboard.ts';
-import { equipFields, newUserFields, profileFields, purchaseFields, rewardFields } from './profile.ts';
+import { buildScore, dailyBoard, MAX_POINTS_PER_SECOND, scoreDocId } from './leaderboard.ts';
+import { dailyBonusFields, equipFields, newUserFields, profileFields, purchaseFields, rewardFields } from './profile.ts';
 import { SHOP, SHOP_CONFIG_ID, shopDocuments } from './shopDocs.ts';
 import { RANKED_MODES } from './types.ts';
 
@@ -67,7 +67,7 @@ describe('firestore.rules ↔ client', () => {
   });
 
   it('mode, diff and lang lists use the code identifiers', () => {
-    expect(list(/d\.mode in (\[[^\]]*\])/)).toEqual([...RANKED_MODES, 'daily']);
+    expect(list(/d\.mode in (\[[^\]]*\])/)).toEqual([...RANKED_MODES]);
     expect(list(/d\.diff in (\[[^\]]*\])/)).toEqual([...GAME_DIFFICULTIES]);
     expect(list(/d\.lang in (\[[^\]]*\])/)).toEqual([...LANGUAGES]);
   });
@@ -84,7 +84,7 @@ describe('firestore.rules ↔ client', () => {
 
   it('the score document has exactly the fields the rules allow (+ createdAt)', () => {
     const fields = buildScore(
-      { mode: 'survival', difficulty: 'normal', lang: 'pt-BR', score: 100, wpm: 40, accuracy: 0.9, elapsed: 30 },
+      { mode: 'survival', difficulty: 'normal', lang: 'pt-BR', day: 0, score: 100, wpm: 40, accuracy: 0.9, elapsed: 30 },
       'uid',
       'Piloto1234',
     );
@@ -99,6 +99,15 @@ describe('firestore.rules ↔ client', () => {
   it('the document id follows the rules', () => {
     expect(rules).toContain("scoreId == d.uid + '_' + d.mode + '_' + d.diff + '_' + d.lang + '_' + string(d.day)");
     expect(scoreDocId('abc', { mode: 'timeAttack', diff: 'hard', lang: 'en', day: 0 })).toBe('abc_timeAttack_hard_en_0');
+    expect(scoreDocId('abc', dailyBoard('pt-BR', 20779))).toBe('abc_daily_normal_pt-BR_20779');
+  });
+
+  it('the daily mode carries its game day and every other mode 0', () => {
+    expect(rules).toContain("(d.mode == 'daily' ? d.day == dayIndex() : d.day == 0)");
+    const match = { difficulty: 'normal', lang: 'en', day: 20779, score: 1, wpm: 1, accuracy: 1, elapsed: 1 } as const;
+    for (const mode of RANKED_MODES) {
+      expect(buildScore({ ...match, mode }, 'uid', 'Piloto1234')?.day).toBe(mode === 'daily' ? 20779 : 0);
+    }
   });
 
   it('the game day is computed the same way (03:00 UTC)', () => {
@@ -138,6 +147,16 @@ describe('users/{uid} writes ↔ firestore.rules', () => {
     expect(Number(capture(/gain <= (\d+)/, fn))).toBe(CONFIG.sync.maxRewardPerWrite);
     expect(Number(capture(/duration\.value\((\d+), 's'\)/, fn))).toBe(CONFIG.sync.rewardIntervalSeconds);
     expect(fn).toContain('incoming().lastReward == request.time');
+  });
+
+  it('Daily Challenge bonus: a reward write that also marks the day paid, within the same limits', () => {
+    const fields = dailyBonusFields(40, 150, 20779, SERVER_TIME);
+    expect(fields).toEqual({ coins: 190, lastReward: SERVER_TIME, 'stats.dailyDay': 20779 });
+    expect(topLevel(fields).filter((key) => !allowedChanges('isReward').includes(key))).toEqual([]);
+    const maxGain = Number(capture(/gain <= (\d+)/, ruleFunction('isReward')));
+    for (const { coins } of CONFIG.dailyBonus.tiers) {
+      expect(Number.isInteger(coins) && coins > 0 && coins <= maxGain).toBe(true);
+    }
   });
 
   it('purchase: coins, exactly one new owned key (= lastPurchase), price from shop/', () => {

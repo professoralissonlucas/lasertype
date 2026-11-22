@@ -250,6 +250,27 @@ kbd {
   line-height: 1.4;
 }
 
+.choice__note {
+  margin-top: auto;
+  color: var(--combo);
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+.choice:disabled .choice__option {
+  cursor: default;
+}
+
+.choice:disabled .choice__body {
+  border-color: rgb(100 116 139 / 0.25);
+  color: var(--muted);
+}
+
+.choice:disabled .choice__option input:checked + .choice__body {
+  border-color: rgb(34 211 238 / 0.5);
+  box-shadow: none;
+}
+
 .choice--cards .choice__body {
   padding: 16px;
   min-height: 92px;
@@ -277,6 +298,14 @@ kbd {
   padding: 24px 16px 120px;
   overflow-y: auto;
   background: radial-gradient(ellipse at center, rgb(5 7 15 / 0.2), rgb(5 7 15 / 0.75));
+}
+
+/* Taller than the screen (phones): scroll from the top instead of cutting it off. Inside
+   @supports because the minifier drops a plain fallback declaration. */
+@supports (justify-content: safe center) {
+  .menu {
+    justify-content: safe center;
+  }
 }
 
 .menu__header {
@@ -331,7 +360,7 @@ kbd {
   display: flex;
   flex-direction: column;
   gap: 22px;
-  width: min(720px, 100%);
+  width: min(880px, 100%);
 }
 
 .menu__row {
@@ -1460,6 +1489,67 @@ kbd {
   display: grid;
   grid-template-columns: 3fr 2fr;
   gap: 16px;
+}
+
+.ranking__daily {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 14px;
+  border-left: 3px solid var(--combo);
+  background: rgb(251 191 36 / 0.06);
+  font-size: 13px;
+}
+
+.ranking__daily-head {
+  display: flex;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+
+.ranking__daily-title {
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+
+.ranking__daily-countdown {
+  color: var(--combo);
+  font-family: var(--font-mono);
+}
+
+.ranking__daily p {
+  margin: 0;
+}
+
+.ranking__daily-own {
+  color: var(--primary);
+}
+
+.ranking__daily-prizes {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.ranking__prizes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.ranking__prizes li {
+  padding: 2px 8px;
+  border: 1px solid rgb(100 116 139 / 0.35);
+  border-radius: 3px;
+  font-family: var(--font-mono);
+  white-space: nowrap;
+}
+
+.ranking__prize-coins {
+  color: var(--combo);
 }
 
 .ranking__table {
