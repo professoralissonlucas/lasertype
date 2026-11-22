@@ -5,8 +5,12 @@ export const LAYOUT = {
   sidePadding: 16,
   /** On very wide screens the play field stays centered at this width. */
   maxFieldWidth: 1100,
-  /** Screen y of normalized y = 0 (leaves room for the HUD). */
-  fieldTop: 76,
+  /** From this width on, the HUD side panels get their own columns outside the field. */
+  sideReserveMinWidth: 1000,
+  /** Width kept free on each side for the HUD panels (panel 230 px + margins). */
+  sideReserve: 262,
+  /** Screen y of normalized y = 0 (leaves room for the score at the top). */
+  fieldTop: 96,
   /** Perimeter distance from the bottom edge. */
   perimeterOffset: 104,
   /** Cannon pivot distance from the bottom edge. */
@@ -19,6 +23,8 @@ export const LAYOUT = {
   wordPadX: 8,
   barrelLength: 52,
   barrelWidth: 8,
+  /** How far the barrel slides back when firing. */
+  recoilDistance: 7,
   baseRadius: 30,
 } as const;
 
@@ -35,7 +41,8 @@ export interface Layout {
 }
 
 export function computeLayout(width: number, height: number): Layout {
-  const fieldWidth = Math.max(1, Math.min(width - LAYOUT.sidePadding * 2, LAYOUT.maxFieldWidth));
+  const side = width >= LAYOUT.sideReserveMinWidth ? LAYOUT.sideReserve : LAYOUT.sidePadding;
+  const fieldWidth = Math.max(1, Math.min(width - side * 2, LAYOUT.maxFieldWidth));
   const fieldTop = LAYOUT.fieldTop;
   return {
     width,
@@ -58,11 +65,11 @@ export function toScreenY(layout: Layout, y: number): number {
   return layout.fieldTop + y * (layout.perimeterY - layout.fieldTop);
 }
 
-/** Left edge of a word's text, centered on x and kept fully inside the screen. */
+/** Left edge of a word's text, centered on x and kept fully inside the play field. */
 export function wordStartX(layout: Layout, x: number, length: number, charWidth: number): number {
   const width = length * charWidth;
-  const min = LAYOUT.sidePadding + LAYOUT.wordPadX;
-  const max = layout.width - LAYOUT.sidePadding - LAYOUT.wordPadX - width;
+  const min = layout.fieldLeft + LAYOUT.wordPadX;
+  const max = layout.fieldLeft + layout.fieldWidth - LAYOUT.wordPadX - width;
   const centered = toScreenX(layout, x) - width / 2;
   return Math.max(min, Math.min(centered, max));
 }

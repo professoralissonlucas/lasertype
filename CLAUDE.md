@@ -25,7 +25,7 @@
 | Build | Vite + TypeScript (strict) |
 | Jogo | Canvas 2D puro (sem engine) |
 | HUD / menus / loja | HTML + CSS sobre o canvas (sem framework de UI) |
-| Áudio | Web Audio API (efeitos em `public/sfx/`, gerados com jsfxr) |
+| Áudio | Web Audio API — efeitos sonoros **sintetizados proceduralmente em runtime** (osciladores + ruído filtrado), sem arquivos de áudio |
 | Backend | Firebase: Auth (anônimo + Google) e Firestore |
 | Deploy | GitHub Actions → GitHub Pages |
 | Testes | Vitest para lógica pura (pontuação, economia, mira, spawn) |
@@ -53,7 +53,8 @@ Antes de dar uma tarefa como concluída: `npm run typecheck && npm run test && n
 
 ```
 src/
-  main.ts                 # bootstrap, troca de telas
+  main.ts                 # bootstrap (carrega configurações, áudio, App)
+  settings/               # modelo puro das configurações + load/save no localStorage
   config.ts               # constantes de balanceamento (velocidades, HP, preços base)
   game/
     Game.ts               # game loop (requestAnimationFrame, delta time fixo)
@@ -79,12 +80,12 @@ src/
     auth.ts               # anônimo, vínculo Google
     profile.ts            # users/{uid}
     leaderboard.ts        # scores
-  ui/                     # telas: menu, hud, pause, report, shop, ranking, settings
-  audio/
-  utils/                  # rng com seed, math, storage
+  ui/                     # app.ts (troca de telas) + telas: menu, hud, combatLog, pause, report, settings (shop, ranking depois)
+  audio/                  # receitas de som (dados), planejamento puro e AudioEngine (Web Audio)
+  utils/                  # rng com seed, math, pool, storage
   styles/
 public/
-  sfx/  music/  fonts/
+  music/  fonts/          # sem sfx/: efeitos sonoros são sintetizados em runtime
 scripts/
   seed-shop.ts            # envia preços do catalog.ts para a coleção shop
 firestore.rules
@@ -114,26 +115,45 @@ firestore.rules
 - Entrada normalizada: minúsculas; acentos removidos por padrão (`ação` aceita `acao`). Opção "Acentos obrigatórios" nas configurações.
 - Sem alvo travado: a tecla escolhe a palavra que começa com ela, mais próxima do perímetro.
 - Com alvo travado: letra certa = tiro + letra acesa; letra errada = erro (zera combo, mantém o alvo).
-- `Backspace` destrava o alvo (e zera o progresso daquela palavra). `Esc` pausa. `Tab` reinicia. `Espaço` ativa o EMP (se carregado).
+- `Backspace` destrava o alvo (e zera o progresso daquela palavra). `Esc` pausa/retoma (com a partida pausada, `Enter` encerra). `Tab` reinicia. `Espaço` ativa o EMP (só com a barra cheia).
+- Trocar de aba pausa a partida automaticamente.
 
 ### Sistemas
-- **Combo:** cada palavra sem erro +1. Multiplicador: 1x (0–4), 2x (5–14), 3x (15–29), 4x (30+).
-- **Escudo:** 3 HP. Palavra que cruza o perímetro = −1 HP.
-- **EMP:** barra de charge enche com combo; ao ativar, destrói todas as palavras na tela (pontua metade).
-- **Ondas:** velocidade e frequência sobem a cada onda; boss a cada 5 ondas (frase que se divide em palavras).
+- **Combo:** cada palavra destruída digitando, sem nenhum erro enquanto estava travada, +1. Qualquer tecla errada (inclusive sem alvo) zera. Dano no escudo **não** zera. Multiplicador: 1x (0–4), 2x (5–14), 3x (15–29), 4x (30+). Lógica pura em `game/combo.ts` (reducer) e `game/scoring.ts`.
+- **Escudo:** 3 HP (também o máximo). Palavra que cruza o perímetro = −1 HP.
+- **EMP:** cada palavra destruída digitando carrega `5% × multiplicador` (20 palavras a 1x; bem menos com combo). Com 100%, `Espaço` destrói todas as palavras na tela por metade dos pontos, esvazia a barra e mantém o combo. Sem carga cheia = som de recusa.
+- **Ondas** (`game/waves.ts`): cada onda tem uma **cota fixa** de palavras (8, +2 por onda, máx. 30); intervalo ×0,92, velocidade +7%, mais palavras difíceis e especiais a cada onda (com tetos em `config.ts`). Como a cota é fixa, a N-ésima palavra pertence sempre à mesma onda e a sequência depende só da seed. Survival/Zen: após a última palavra da onda, espera a tela limpar e dá 2,5 s de respiro com o anúncio "Onda N"; Time Attack emenda as ondas. Boss a cada 5 ondas (frase que se divide em palavras) fica para a Fase 7.
 - **Palavras especiais:** 💣 Bomba (destrói vizinhas), ❄️ Gelo (slow 3s), 🛡️ Escudo (+1 HP), ☠️ Blindada (digitar 2x).
+  - Efeitos só disparam quando a palavra é destruída **digitando**; palavras pegas por bomba/EMP valem metade e não disparam efeito (sem reação em cadeia, EMP não cura).
+  - Bomba: elipse de 0,2 largura × 0,22 altura do campo. Gelo: palavras e ritmo de spawn a 40% por 3 s (o relógio do Time Attack não desacelera). Escudo: +1 HP até o máximo. Blindada: 2 passadas, continua travada entre elas, letras contam em dobro na pontuação.
+  - Visual: selo no canto da placa (bomba, floco, escudo, barras de blindagem) + cor da borda; blindada mostra uma placa extra atrás.
 
 ### Pontuação
 ```
 pontos_palavra = letras × 10 × multiplicador_combo × bonus_altura
 bonus_altura   = 1.5 se destruída na metade superior da tela, senão 1.0
 ```
-Nota final (S/A/B/C/D) combina precisão, WPM e % de palavras destruídas (fórmula em `scoring.ts`).
+- O multiplicador usa o combo **já contando** a palavra destruída (a 5ª palavra limpa já vale 2x).
+- "Metade superior" = metade superior do campo (y normalizado < 0,5). `letras` soma as passadas (blindada conta 2×).
+- Bomba/EMP: `pontos_palavra × 0,5`.
+Nota final (S/A/B/C/D) combina precisão, WPM e % de palavras destruídas (fórmula em `scoring.ts`):
+```
+nota = 0.40 × precisão + 0.35 × min(1, WPM / 60) + 0.25 × defesa
+precisão = letras certas / teclas digitadas
+WPM      = (letras certas / 5) / minutos jogados (pausas não contam)
+defesa   = destruídas / (destruídas + perdidas no perímetro)
+S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 palavras destruídas = D)
+```
 
-### Modos
+### Dificuldade (escolhida no menu)
+- Fácil / Normal / Difícil são presets (`CONFIG.difficulty`) aplicados ao spawn da onda 1; a curva das ondas continua igual por cima. Fácil: velocidade ×0,8, intervalo ×1,2, +15% de palavras fáceis. Difícil: velocidade ×1,25, intervalo ×0,85, −25% de palavras fáceis.
+- A pontuação não muda com a dificuldade → o ranking (Fase 5) deve separar por modo **e** dificuldade. O Desafio Diário (Fase 7) usa Normal.
+
+### Modos (`src/modes/`, dados puros)
 - **Survival:** infinito até o escudo zerar.
 - **Time Attack:** 60 s, maior pontuação.
-- **Zen:** sem dano, para treinar (não vale ranking nem moedas cheias).
+- **Zen:** sem dano, para treinar (não vale ranking nem moedas cheias). Termina pela pausa (`Esc` → `Enter`).
+- Modo, dificuldade e idioma são escolhidos no menu principal (e lembrados nas configurações).
 - **Desafio Diário:** seed = data UTC (`YYYY-MM-DD`); mesma sequência para todos; ranking próprio.
 
 ---
@@ -149,7 +169,22 @@ Nota final (S/A/B/C/D) combina precisão, WPM e % de palavras destruídas (fórm
   - `--text: #E2E8F0`, `--muted: #64748B`
 - Fontes: **Orbitron** (títulos/HUD), **JetBrains Mono** (palavras). Auto-hospedadas em `public/fonts/`.
 - Efeitos: glow com `shadowBlur` + `globalCompositeOperation = 'lighter'`, partículas, screen shake leve, flash curto, recuo do canhão.
-- Acessibilidade: opção "Reduzir efeitos" (sem shake/flash), modo daltônico, volume separado música/efeitos.
+  - `shadowBlur` só em poucos elementos (laser, palavra travada, perímetro após dano) e multiplicado pelo DPR (o blur ignora a transformação). Partículas usam sprites de brilho pré-renderizados com `'lighter'`.
+  - Aleatoriedade visual também via `utils/rng.ts` (seeds fixas por sistema: `fx`, `sfx`, starfield, nebulosa).
+- Acessibilidade: opção "Reduzir efeitos", modo daltônico, volume separado música/efeitos.
+  - "Reduzir efeitos" (tela de Configurações): sem screen shake, sem flash de tela, fundo parado (também nos menus) e metade das partículas. O pulso do perímetro continua (é o aviso de dano que substitui o flash). Na primeira visita, começa ligado se o sistema pede `prefers-reduced-motion`.
+  - Modo daltônico e volume de música ficam para quando houver música/cosméticos de cor.
+
+### Configurações (`src/settings/`)
+- Salvas no `localStorage` em `lasertype.settings.v1` a cada mudança: idioma (interface **e** palavras), volume dos efeitos, reduzir efeitos, acentos obrigatórios, último modo e última dificuldade do menu.
+- Leitura tolerante (`parseSettings`): cada campo inválido/ausente volta ao padrão; storage indisponível (aba anônima, bloqueio) = padrões em memória, sem erro.
+
+### Áudio (decisão da Fase 2)
+- **Sem arquivos de efeitos sonoros:** cada som é uma *receita* de dados (`audio/recipes.ts`) com camadas de oscilador (`tone`: forma de onda, frequência, glide) e de ruído filtrado (`noise`: filtro, cutoff, sweep), cada uma com envelope ataque → release exponencial.
+- `audio/plan.ts` (puro, testado) aplica pitch/jitter e cooldown; `audio/AudioEngine.ts` sintetiza com Web Audio (master gain → compressor). O `AudioContext` só é criado/retomado no primeiro gesto do usuário (tecla ou clique).
+- O jogo depende só da interface `SoundPlayer`; eventos de jogo → sons em `Game.flushEvents`.
+- Cosmético `soundPack` = outro conjunto de receitas (mesmo formato), sem arquivos.
+- Música ainda não decidida (pasta `public/music/` mantida).
 
 ---
 
@@ -249,11 +284,28 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - **Spawner determinístico:** a sequência (palavra, x, velocidade) depende só da seed e do histórico do próprio spawner, nunca das ações do jogador; o timing é separado. Evita repetir palavras recentes e, quando possível, iniciais das últimas 5 palavras.
   - Lógica emite `GameEvent`s (`hit`, `destroy`, `breach`, `miss`...) que a apresentação consome — ponto de encaixe para partículas/sons da Fase 2.
   - Listas: ~100 palavras por dificuldade (fácil 3–5 letras, média 6–8, difícil 9–14) em pt-BR e en.
-  - Parâmetros de URL provisórios (até existir a tela de configurações): `?lang=en`, `?seed=abc`, `?accents=1`.
+  - Parâmetro de URL para testes: `?seed=abc` fixa a sequência de palavras (os demais viraram Configurações na Fase 4).
   - Fontes Orbitron/JetBrains Mono ainda não estão em `public/fonts/`; CSS e canvas usam fallbacks do sistema.
-- [ ] **Fase 2 — Juice:** laser com glow, partículas, explosão, screen shake, recuo do canhão, sons.
-- [ ] **Fase 3 — Sistemas:** combo, ondas, palavras especiais, EMP, pausa, modos.
-- [ ] **Fase 4 — Telas:** menu, HUD completo, Mission Report, configurações (localStorage).
+- [x] **Fase 2 — Juice:** laser com glow, partículas, explosão, screen shake, recuo do canhão, sons.
+  - `game/effects/`: pool de partículas pré-alocado (`utils/pool.ts`, sem alocação durante a partida) com faíscas, brilhos, anéis e letras; emissores puros para impacto por letra, explosão (as letras da palavra voam) e breach (letras vermelhas no perímetro); `ScreenShake` por trauma (offset ∝ trauma², máx. 8 px); `ScreenFlash`; pulso do perímetro. A camada de fundo não treme (só o "mundo").
+  - Canhão com recuo e retenção da mira enquanto o feixe está visível (feixe e cano sempre alinhados).
+  - Fundo procedural (`render/background.ts`): nebulosa por fBm de ruído periódico (textura 256² emendável, desenhada como `CanvasPattern` repetido) + 3 camadas de estrelas em parallax; offsets interpolados.
+  - Sons procedurais (ver §7 Áudio): tiro (pitch sobe a cada letra), erro, destravar, explosão, dano no escudo, fim de jogo.
+- [x] **Fase 3 — Sistemas:** combo, ondas, palavras especiais, EMP, pausa, modos.
+  - Lógica pura e testada: `scoring.ts` (multiplicador, pontos, bônus de altura), `combo.ts` (reducer de combo + carga do EMP), `waves.ts` (curva de dificuldade), `specials.ts` (sorteio de tipo, vizinhas da bomba), `modes/`. `state.ts` integra tudo (EMP, pausa, fim por escudo/tempo/desistência).
+  - Spawner com ondas: conteúdo determinístico por cota, timing separado (pausa entre ondas só nos modos com `waveBreak`).
+  - HUD mínimo (o completo é da Fase 4): pontos, combo/multiplicador, onda, cronômetro do Time Attack, chip "Lento", barra de EMP (também em arco no canhão) e anúncio de onda. Telas de pausa e de fim com motivo e estatísticas.
+  - Sons procedurais novos: armadura, bomba, gelo, escudo, EMP, EMP pronto, multiplicador, onda.
+  - Áudio só é criado/retomado com gesto de ativação real (`navigator.userActivation`); teclas modificadoras não contam.
+  - Gancho de desenvolvimento `window.__lasertype` só em `npm run dev`; removido do build de produção. Desde a Fase 4 é o `App` (`__lasertype.game.state` = estado da partida ou `null` nos menus).
+- [x] **Fase 4 — Telas:** menu, HUD completo, Mission Report, configurações (localStorage).
+  - `ui/app.ts` troca as telas (menu ↔ configurações ↔ partida) sobre o canvas, que continua animando a estação ociosa nos menus (`Game` sem partida). Teclado: o input do jogo só fica ligado durante a partida; nos menus vale a navegação nativa (Tab, setas nos grupos, Enter joga, Esc volta).
+  - Menu: modo (cards), dificuldade e idioma; Configurações: idioma, volume (com prévia), reduzir efeitos, acentos obrigatórios. Trocar o idioma reconstrói todas as telas.
+  - HUD completo: escudo, carga do EMP, pontos, combo/multiplicador, modo·dificuldade, onda, tempo (ou restante), abates, precisão, WPM, chip "Lento", anúncio de onda e **registro de combate** (últimas 7 palavras destruídas com multiplicador/causa e pontos). Valores contínuos atualizam a cada 0,1 s; o DOM só é tocado quando algo muda.
+  - Layout: a partir de 1000 px de largura o campo reserva 262 px de cada lado para os painéis do HUD (palavras nunca nascem atrás deles); abaixo disso a coluna direita some.
+  - Mission Report (`game/report.ts` puro + `ui/report.ts`): nota S–D, pontuação e 10 estatísticas; Enter/Tab joga de novo, Esc vai ao menu. Pausa com botões (Continuar/Reiniciar/Encerrar).
+  - Textos todos em `ui/i18n.ts` (pt-BR referência, EN completo, placeholders `{n}`); teste garante as mesmas chaves e placeholders nos dois idiomas.
+  - Moedas no relatório ficam para a Fase 4.5.
 - [ ] **Fase 4.5 — Cosméticos offline:** catálogo, renderers parametrizados, loja, inventário, prévia ao vivo.
 - [ ] **Fase 5 — Firebase:** Auth anônimo, envio de score, ranking, regras.
 - [ ] **Fase 5.5 — Contas e economia online:** vínculo Google, sync de perfil, regras de moedas/compra, missões, streak.

@@ -24,7 +24,9 @@ export type InputAction =
   | { readonly type: 'char'; readonly char: string }
   | { readonly type: 'unlock' }
   | { readonly type: 'restart' }
-  | { readonly type: 'confirm' };
+  | { readonly type: 'confirm' }
+  | { readonly type: 'pause' }
+  | { readonly type: 'emp' };
 
 /** The subset of KeyboardEvent the mapping needs (keeps it testable without a DOM). */
 export interface KeyLike {
@@ -38,6 +40,8 @@ export interface KeyLike {
 const UNLOCK: InputAction = { type: 'unlock' };
 const RESTART: InputAction = { type: 'restart' };
 const CONFIRM: InputAction = { type: 'confirm' };
+const PAUSE: InputAction = { type: 'pause' };
+const EMP: InputAction = { type: 'emp' };
 
 /** Maps a key press to a game action, or null when the game should ignore it. */
 export function keyToAction(event: KeyLike): InputAction | null {
@@ -52,6 +56,10 @@ export function keyToAction(event: KeyLike): InputAction | null {
       return RESTART;
     case 'Enter':
       return CONFIRM;
+    case 'Escape':
+      return PAUSE;
+    case ' ':
+      return EMP;
   }
 
   const key = event.key.normalize('NFC');

@@ -8,11 +8,14 @@ export const PALETTE = {
   muted: '#64748B',
 } as const;
 
+/** `#RRGGBB` → [r, g, b]. */
+export function hexToRgb(hex: string): [number, number, number] {
+  const value = Number.parseInt(hex.slice(1), 16);
+  return [(value >> 16) & 0xff, (value >> 8) & 0xff, value & 0xff];
+}
+
 /** `#RRGGBB` + alpha → `rgba(...)`. Call once at module load, not per frame. */
 export function withAlpha(hex: string, alpha: number): string {
-  const value = Number.parseInt(hex.slice(1), 16);
-  const r = (value >> 16) & 0xff;
-  const g = (value >> 8) & 0xff;
-  const b = value & 0xff;
+  const [r, g, b] = hexToRgb(hex);
   return `rgba(${r}, ${g}, ${b}, ${alpha})`;
 }

@@ -77,10 +77,12 @@ describe('keyToAction', () => {
     expect(keyToAction(key('Backspace'))).toEqual({ type: 'unlock' });
     expect(keyToAction(key('Tab'))).toEqual({ type: 'restart' });
     expect(keyToAction(key('Enter'))).toEqual({ type: 'confirm' });
+    expect(keyToAction(key('Escape'))).toEqual({ type: 'pause' });
+    expect(keyToAction(key(' '))).toEqual({ type: 'emp' });
   });
 
   it('ignores non-letter keys', () => {
-    for (const value of ['1', ' ', '-', 'Dead', 'Shift', 'ArrowLeft', 'F5', 'Process']) {
+    for (const value of ['1', '-', 'Dead', 'Shift', 'ArrowLeft', 'F5', 'Process']) {
       expect(keyToAction(key(value))).toBeNull();
     }
   });

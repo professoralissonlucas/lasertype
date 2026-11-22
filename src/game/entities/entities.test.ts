@@ -26,6 +26,26 @@ describe('Cannon', () => {
     cannon.snapTo(0.4);
     expect(cannon.interpolated(0.5)).toBeCloseTo(0.2);
   });
+
+  it('kicks back when firing and returns to rest quickly', () => {
+    const cannon = new Cannon();
+    cannon.beginStep();
+    cannon.kick();
+    expect(cannon.recoil).toBe(1);
+    expect(cannon.interpolatedRecoil(0.5)).toBeCloseTo(0.5);
+    for (let i = 0; i < 12; i++) {
+      cannon.beginStep();
+      cannon.recover(1 / 60);
+    }
+    expect(cannon.recoil).toBe(0);
+  });
+
+  it('reset() clears recoil', () => {
+    const cannon = new Cannon();
+    cannon.kick();
+    cannon.reset();
+    expect(cannon.recoil).toBe(0);
+  });
 });
 
 describe('LaserPool', () => {

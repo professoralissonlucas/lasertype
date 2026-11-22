@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatPercent, formatTime } from './format.ts';
+import { createIntegerFormatter, formatPercent, formatTime } from './format.ts';
 import { aimAngle, clamp, lerp } from './math.ts';
 
 describe('math', () => {
@@ -25,6 +25,12 @@ describe('format', () => {
     expect(formatTime(0)).toBe('0:00');
     expect(formatTime(75.9)).toBe('1:15');
     expect(formatTime(600)).toBe('10:00');
+  });
+
+  it('formats scores with the locale thousands separator', () => {
+    expect(createIntegerFormatter('pt-BR')(12340)).toBe('12.340');
+    expect(createIntegerFormatter('en')(12340)).toBe('12,340');
+    expect(createIntegerFormatter('en')(7.6)).toBe('8');
   });
 
   it('formats ratios as whole percentages', () => {

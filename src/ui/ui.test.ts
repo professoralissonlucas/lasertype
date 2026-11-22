@@ -1,0 +1,64 @@
+import { describe, expect, it } from 'vitest';
+import { LANGUAGES } from '../words/types.ts';
+import { CombatLogModel } from './combatLog.ts';
+import { createTranslator, interpolate, STRING_KEYS } from './i18n.ts';
+
+describe('i18n', () => {
+  const pt = createTranslator('pt-BR');
+  const en = createTranslator('en');
+
+  it('translates and fills placeholders', () => {
+    expect(pt('waveBanner', { n: 3 })).toBe('Onda 3');
+    expect(en('waveBanner', { n: 3 })).toBe('Wave 3');
+  });
+
+  it('leaves unknown placeholders alone', () => {
+    expect(interpolate('{a} and {b}', { a: 1 })).toBe('1 and {b}');
+    expect(interpolate('no vars')).toBe('no vars');
+  });
+
+  it('every language has a non-empty text for every key, with the same placeholders', () => {
+    const placeholders = (text: string) => [...text.matchAll(/\{(\w+)\}/g)].map((m) => m[1]).sort();
+    expect(STRING_KEYS.length).toBeGreaterThan(50);
+    for (const lang of LANGUAGES) {
+      const t = createTranslator(lang);
+      for (const key of STRING_KEYS) {
+        expect(t(key).length, `${lang}.${key}`).toBeGreaterThan(0);
+        expect(placeholders(t(key)), `${lang}.${key}`).toEqual(placeholders(pt(key)));
+      }
+    }
+  });
+});
+
+describe('CombatLogModel', () => {
+  const kill = (text: string, points = 10) =>
+    ({ text, kind: 'normal', cause: 'typed', points, multiplier: 1 }) as const;
+
+  it('keeps the newest entry first', () => {
+    const log = new CombatLogModel(5);
+    log.add(kill('sol'));
+    log.add(kill('lua'));
+    expect(log.entries.map((e) => e.text)).toEqual(['lua', 'sol']);
+  });
+
+  it('drops the oldest entries beyond capacity', () => {
+    const log = new CombatLogModel(3);
+    for (const text of ['a', 'b', 'c', 'd', 'e']) log.add(kill(text));
+    expect(log.entries.map((e) => e.text)).toEqual(['e', 'd', 'c']);
+  });
+
+  it('gives every entry a unique id and keeps its details', () => {
+    const log = new CombatLogModel(5);
+    const a = log.add(kill('sol', 30));
+    const b = log.add({ text: 'mar', kind: 'bomb', cause: 'emp', points: 15, multiplier: 2 });
+    expect(a.id).not.toBe(b.id);
+    expect(b).toMatchObject({ text: 'mar', kind: 'bomb', cause: 'emp', points: 15, multiplier: 2 });
+  });
+
+  it('clear() empties the log', () => {
+    const log = new CombatLogModel(5);
+    log.add(kill('sol'));
+    log.clear();
+    expect(log.entries).toEqual([]);
+  });
+});
