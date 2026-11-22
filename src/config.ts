@@ -1,5 +1,6 @@
 // Balancing constants. Every gameplay number lives here, never inline.
 import type { EconomyConfig } from './economy/types.ts';
+import type { RankingConfig } from './firebase/types.ts';
 import type {
   ComboConfig,
   DifficultyPreset,
@@ -116,8 +117,23 @@ const ECONOMY: EconomyConfig = {
   modeFactor: { survival: 1, timeAttack: 1, zen: 0.25 },
   rarityPrice: { common: 300, rare: 900, epic: 2500, legendary: 6000 },
   shopSize: 4,
-  discountFactor: 0.7,
+  // Discount in integer math, exactly as firestore.rules: floor(price × 7 / 100) × 10.
+  discountKeepTenths: 7,
   discountStep: 10,
+};
+
+/**
+ * Global ranking. The limits mirror the score validation in firestore.rules (the contract;
+ * firebase/rules.test.ts fails if they drift apart). maxPointsPerSecond is not stored:
+ * it is computed from the balancing numbers (scoring.ts → maxPointsPerSecond).
+ */
+const RANKING: RankingConfig = {
+  topSize: 50,
+  maxWpm: 250,
+  maxDuration: 3600,
+  timeAttackMaxDuration: 65,
+  nameMin: 3,
+  nameMax: 12,
 };
 
 const DEFAULT_LANGUAGE: Language = 'pt-BR';
@@ -140,4 +156,5 @@ export const CONFIG = {
   difficulty: DIFFICULTY,
   grading: GRADING,
   economy: ECONOMY,
+  ranking: RANKING,
 } as const;

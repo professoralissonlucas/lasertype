@@ -26,7 +26,7 @@
 | Jogo | Canvas 2D puro (sem engine) |
 | HUD / menus / loja | HTML + CSS sobre o canvas (sem framework de UI) |
 | Áudio | Web Audio API — efeitos sonoros **sintetizados proceduralmente em runtime** (osciladores + ruído filtrado), sem arquivos de áudio |
-| Backend | Firebase: Auth (anônimo + Google) e Firestore |
+| Backend | Firebase: Auth (anônimo + Google) e Firestore (SDK *lite*), carregados sob demanda só quando há config |
 | Deploy | GitHub Actions → GitHub Pages |
 | Testes | Vitest para lógica pura (pontuação, economia, mira, spawn) |
 
@@ -81,11 +81,16 @@ src/
     repository.ts         # onde o inventário mora (localStorage; Firestore na 5.5)
     Economy.ts            # estado + repositório + listeners (a UI só fala com ele)
   firebase/
-    app.ts                # init
-    auth.ts               # anônimo, vínculo Google
-    profile.ts            # users/{uid}
-    leaderboard.ts        # scores
-  ui/                     # app.ts (troca de telas) + telas: menu, hud, combatLog, pause, report, settings, shop (+ shopPreview, shopModel, previewScript); ranking depois
+    app.ts                # config VITE_FIREBASE_* + carregamento sob demanda do SDK (null = offline)
+    types.ts              # estado da conta, Board, ScoreFields, RankingConfig
+    auth.ts               # AuthService: anônimo automático, vínculo Google por popup (backend atrás de interface)
+    leaderboard.ts        # scores: id, documento, validação espelhando as regras, recorde, top 50
+    rules.test.ts         # garante que firestore.rules e o cliente não divergem
+    profile.ts            # users/{uid} (Fase 5.5)
+  profile/
+    nickname.ts           # apelido do ranking (validação, sugestão, localStorage por uid)
+  ui/                     # app.ts (troca de telas) + telas: menu, hud, combatLog, pause, report, settings, shop
+                          # (+ shopPreview, shopModel, previewScript), ranking, account (selo), nicknameDialog, toast
   audio/                  # receitas de som (dados), planejamento puro e AudioEngine (Web Audio)
   utils/                  # rng com seed, math, pool, storage, day (dia de jogo: dayIndex/dayKey)
   styles/
@@ -93,7 +98,7 @@ public/
   music/  fonts/          # sem sfx/: efeitos sonoros são sintetizados em runtime
 scripts/
   seed-shop.ts            # envia preços do catalog.ts para a coleção shop
-firestore.rules
+firestore.rules           # CONTRATO do backend (ver §9)
 .github/workflows/deploy.yml
 ```
 
@@ -152,7 +157,7 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
 
 ### Dificuldade (escolhida no menu)
 - Fácil / Normal / Difícil são presets (`CONFIG.difficulty`) aplicados ao spawn da onda 1; a curva das ondas continua igual por cima. Fácil: velocidade ×0,8, intervalo ×1,2, +15% de palavras fáceis. Difícil: velocidade ×1,25, intervalo ×0,85, −25% de palavras fáceis.
-- A pontuação não muda com a dificuldade → o ranking (Fase 5) deve separar por modo **e** dificuldade. O Desafio Diário (Fase 7) usa Normal.
+- A pontuação não muda com a dificuldade → o ranking (Fase 5) separa por modo, dificuldade **e** idioma das palavras. O Desafio Diário (Fase 7) usa Normal.
 
 ### Modos (`src/modes/`, dados puros)
 - **Survival:** infinito até o escudo zerar.
@@ -238,8 +243,8 @@ interface CosmeticItem<T extends CosmeticType> {
 ### Loja rotativa (`economy/shop.ts`)
 - 4 itens por dia de jogo, iguais para todos; o item com desconto vem primeiro.
 - **Item com desconto, sem rng** (para as regras do Firestore refazerem a conta):
-  `discountedId = DISCOUNT_ORDER[dayIndex % DISCOUNT_ORDER.length]`, preço `floor(price × 0,7 / 10) × 10` (300→210, 900→630, 2.500→1.750, 6.000→4.200).
-  `DISCOUNT_ORDER` (em `cosmetics/catalog.ts`) lista todos os itens compráveis em ordem fixa, alternando categorias. Mudar a lista muda o desconto de todos os dias futuros: atualizar a cópia nas regras junto.
+  `discountedId = DISCOUNT_ORDER[dayIndex % DISCOUNT_ORDER.length]`, preço em aritmética inteira, exatamente como nas regras: `Math.floor(price * 7 / 100) * 10` (300→210, 900→630, 2.500→1.750, 6.000→4.200).
+  `DISCOUNT_ORDER` (em `cosmetics/catalog.ts`) lista todos os itens compráveis em ordem fixa, alternando categorias. As regras leem a mesma lista em `shop/_config.discountOrder` (gravada por `scripts/seed-shop.ts`, Fase 5.5). Mudar a lista muda o desconto de todos os dias futuros: regravar `shop/_config` junto.
 - **Os outros 3** são sorteados com seed `shop:YYYY-MM-DD` (`dayKey`), excluindo o item com desconto e preferindo categorias que ainda não estão na loja.
 - Compra só de itens da loja do dia, pelo preço do dia; em dois cliques (Comprar → Confirmar). Comprar não equipa.
 - Tela da loja: abas "Loja do dia" e "Inventário" (todas as categorias; equipar o que possui), contagem até a próxima rotação e **prévia ao vivo** do item selecionado (mini canvas com a cena roteirizada de `ui/previewScript.ts`, desenhada com as mesmas funções do jogo, por cima do que está equipado).
@@ -253,11 +258,30 @@ interface CosmeticItem<T extends CosmeticType> {
 
 ## 9. Firebase
 
-### Autenticação
-- Entrar sempre como **anônimo** automaticamente.
-- "Salvar progresso" → `linkWithPopup(GoogleAuthProvider)`; fallback `linkWithRedirect` no mobile.
-- Tratar `auth/credential-already-in-use`: logar na conta existente e perguntar qual progresso manter.
-- Ranking global exibe apenas contas vinculadas ao Google.
+### `firestore.rules` é o contrato
+- O arquivo na raiz é a fonte da verdade do backend: **o cliente se adapta a ele, exatamente**. Mudar qualquer regra = perguntar antes.
+- Só podem ser ajustados (avisando) as listas de identificadores (`mode`/`diff`/`lang`) para bater com os nomes do código e `maxPointsPerSecond`, calculado pelo máximo teórico de `scoring.ts`.
+- `firebase/rules.test.ts` lê o arquivo e falha se divergir do cliente: listas, limites (WPM, duração, nome, precisão), `maxPointsPerSecond`, campos e id do documento, dia de jogo (03:00 UTC) e fórmula do desconto.
+- Publicar: Console → Firestore Database → Regras → colar o arquivo → Publicar (o deploy não publica regras).
+
+### Autenticação (`firebase/auth.ts`)
+- Sem `VITE_FIREBASE_*` o SDK nem é baixado: o jogo funciona offline, sem conta nem ranking, sem erros.
+- Login **anônimo** automático ao abrir o jogo (em segundo plano; o jogo nunca espera).
+- "Entrar com Google" (menu, ranking e Mission Report) → `linkWithPopup(GoogleAuthProvider)` chamado **direto no clique** (sem redirect), depois `getIdToken(true)` para o token trazer a identidade `google.com` que as regras exigem.
+- `auth/credential-already-in-use`: entra na conta Google existente com `GoogleAuthProvider.credentialFromError` + `signInWithCredential`, mantém o progresso dela e avisa: "Você entrou na sua conta Google existente. O progresso desta sessão anônima não foi transferido." (Na Fase 5 não há progresso na nuvem; moedas e inventário locais ficam como estão até a 5.5.)
+- Popup fechado = cancelamento silencioso; popup bloqueado e outros erros = aviso.
+
+### Apelido (privacidade)
+- **Nunca usar o nome real nem a foto do Google** (alunos podem jogar). No primeiro vínculo o jogador escolhe um apelido de 3 a 12 caracteres (letras, números, `_` e espaço), sugerido como `"Piloto" + 4 caracteres do uid`; editável depois pelo selo de conta. Cancelar mantém a sugestão.
+- Guardado no `localStorage` (`lasertype.nicknames.v1`, por uid: computadores compartilhados). Na 5.5 vai para `users/{uid}.name`. Trocar o apelido não altera recordes já enviados (as regras só aceitam atualizar com score maior).
+
+### Ranking (`firebase/leaderboard.ts`, `ui/ranking.ts`)
+- Só contas Google enviam; Zen nunca envia. Um documento por jogador/quadro: id `${uid}_${mode}_${diff}_${lang}_${day}` (`day = dayIndex()` no modo daily, 0 nos outros).
+- Ao fim da partida: lê o documento e só grava se **superar o recorde**; `createdAt = serverTimestamp()`, `duration` em segundos (sem pausas), `accuracy` em %, sem `photo`.
+- Antes de enviar, o cliente aplica as mesmas checagens das regras (`scoreProblems`); partidas fora dos limites (ex.: Survival com mais de 1 h, WPM > 250) não são enviadas.
+- O Mission Report mostra o resultado (novo recorde, recorde atual, entre com Google, Zen não conta, erro); entrando com Google pelo relatório, a partida é enviada em seguida.
+- Tela: abas por modo (Survival, Time Attack; Daily na Fase 7), filtros de dificuldade e idioma, top 50, linha do jogador destacada (ou abaixo da tabela, fora do top). Leituras em cache por 30 s por quadro.
+- **Índice composto** (Console → Firestore → Índices): coleção `scores`, campos `mode` ↑, `diff` ↑, `lang` ↑, `day` ↑, `score` ↓, escopo Coleção. Sem ele a consulta do top falha com `failed-precondition` (a mensagem do erro traz o link de criação).
 
 ### Coleções
 ```
@@ -270,15 +294,19 @@ users/{uid}
   stats: { games, bestScore, bestWpm, ... }
 
 shop/{itemId}   → { price, rarity, type }      # somente leitura para clientes
-scores/{id}     → { uid, name, score, wpm, accuracy, mode, lang, date, createdAt }
+shop/_config    → { discountOrder: [itemId, ...] }  # mesma ordem de DISCOUNT_ORDER
+scores/{uid}_{mode}_{diff}_{lang}_{day}
+                → { uid, name, score (int), wpm (≤ 250), accuracy (0–100), mode, diff, lang,
+                    duration (s, 0 < d ≤ 3600; Time Attack ≤ 65), day, createdAt (= request.time), photo? }
 ```
 
-### Regras de segurança (intenção — implementar em `firestore.rules`)
-- Usuário só lê/escreve `users/{uid}` próprio (`request.auth.uid == uid`).
-- **Ganho de moedas:** aumento ≤ 150 por escrita e `request.time > lastReward + 30s`.
-- **Compra:** exatamente 1 chave nova em `owned` (`diff().addedKeys()`), igual a `lastPurchase`; `coins` diminui exatamente o preço do dia: `get(shop/lastPurchase).price`, ou `math.floor(price * 0.7 / 10) * 10` quando `lastPurchase == DISCOUNT_ORDER[dayIndex % n]` com `dayIndex = math.floor((request.time.toMillis() - 10800000) / 86400000)` (lista `DISCOUNT_ORDER` copiada nas regras); saldo nunca negativo. (Validar que os outros 3 itens estão na loja do dia exigiria o rng no servidor; aceitar qualquer item vendável a preço cheio é o limite das regras.)
-- `shop` é somente leitura.
-- `scores`: apenas criação, `uid` igual ao autenticado, campos validados (nome 3–12 chars, score ≤ limite plausível por modo, 1 envio a cada 30 s).
+### O que as regras exigem (resumo; o arquivo manda)
+- `users/{uid}`: só o dono lê/escreve; criação com moedas/xp 0, `owned` vazio, nome válido e `lastReward == request.time`. Cada atualização é de **um** tipo:
+  - **Recompensa:** só `coins, xp, level, stats, streak, lastLogin, lastReward`; ganho de 0 a 150 moedas e 0 a 2.000 XP; `lastReward == request.time` e mais de 30 s desde a anterior.
+  - **Compra:** só `coins, owned, lastPurchase`; exatamente 1 item novo (= `lastPurchase`); `coins` cai exatamente o preço do dia (`shop/{id}.price`, ou `floor(price * 7 / 100) * 10` se for o item de `shop/_config.discountOrder[dayIndex % n]`); saldo ≥ 0. (As regras não conferem se os outros 3 itens estavam na loja do dia: isso exigiria o rng no servidor.)
+  - **Equipar:** só o mapa `equipped`. **Perfil:** só `name` (3–12) e `photo`.
+- `scores`: leitura pública; criação/atualização só por conta Google, com `uid` próprio, campos e limites validados, `score ≤ duration × maxPointsPerSecond` (1977, ver §11 Fase 5) e id no formato acima; atualização só com score maior.
+- `shop/*` somente leitura (gravado pelo script admin).
 - Ativar App Check (reCAPTCHA v3) quando o deploy estiver no ar.
 - As chaves de config do Firebase podem ficar no front-end; a segurança está nas regras.
 - **Não implementar venda de moedas por dinheiro real** (exigiria validação em servidor / Cloud Functions).
@@ -293,7 +321,7 @@ scores/{id}     → { uid, name, score, wpm, accuracy, mode, lang, date, created
 
 - `vite.config.ts`: `base: '/lasertype/'`.
 - Workflow `.github/workflows/deploy.yml`: build no push para `main` e publica `dist/` com `actions/deploy-pages`.
-- Config do Firebase via variáveis `VITE_FIREBASE_*` (arquivo `.env.local` fora do git; secrets no GitHub Actions).
+- Config do Firebase via variáveis `VITE_FIREBASE_*` (arquivo `.env.local` fora do git; no CI, os 6 secrets `VITE_FIREBASE_API_KEY`, `_AUTH_DOMAIN`, `_PROJECT_ID`, `_STORAGE_BUCKET`, `_MESSAGING_SENDER_ID`, `_APP_ID` entram no passo de build). Sem eles o build sai offline (sem conta/ranking).
 - Adicionar o domínio `<usuario>.github.io` em Authentication → Domínios autorizados no Firebase.
 
 ---
@@ -337,11 +365,18 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Loja rotativa com o dia de jogo (03:00 UTC) e desconto determinístico por `DISCOUNT_ORDER` (§8); inventário e equipar; prévia ao vivo num mini canvas (pausa fora da tela da loja, respeita "Reduzir efeitos").
   - `economy/` isolada: lógica pura + `InventoryRepository` (localStorage) + `Economy` com mudanças tipadas para o sync da 5.5.
   - Sons procedurais novos: compra e equipar. `__lasertype.economy` no gancho de desenvolvimento.
-- [ ] **Fase 5 — Firebase:** Auth anônimo, envio de score, ranking, regras.
+- [x] **Fase 5 — Firebase:** Auth anônimo, envio de score, ranking, regras.
+  - `firestore.rules` copiado do contrato com os dois ajustes autorizados: `diff` `'medium'` → `'normal'` (nome do código) e `maxPointsPerSecond` 1500 → **1977**.
+  - `maxPointsPerSecond` = `ceil(maior palavra × 2 passadas (blindada) × 10 × 4x × 1,5 / intervalo mínimo de spawn)` = `ceil(14 × 2 × 10 × 4 × 1,5 / 0,85)` = 1977 (`scoring.ts → maxPointsPerSecond`). O spawner solta no máximo 1 palavra por `waves.minInterval` em qualquer dificuldade; bomba/EMP pagam metade da mesma palavra; a rampa do combo só reduz (o teste simula a partida perfeita). Mudar o balanceamento → o teste de sincronia aponta o novo valor.
+  - Firebase carregado sob demanda (`firebase/app.ts`); sem config, nada é baixado. Auth anônimo + vínculo Google por popup, apelido local, envio de recorde, tela de ranking, aviso de conta trocada (§9).
+  - Desconto da loja passou para a aritmética inteira do contrato (`Math.floor(price * 7 / 100) * 10`; mesmos valores).
+  - Workflow com os secrets `VITE_FIREBASE_*`. Testado no navegador: login anônimo real e leitura do ranking (falha até o índice composto existir).
+  - Pendências no console: publicar `firestore.rules`, criar o índice composto de `scores` (§9) e autorizar o domínio do GitHub Pages no Auth.
 - [ ] **Fase 5.5 — Contas e economia online:** vínculo Google, sync de perfil, regras de moedas/compra, missões, streak.
 - [ ] **Fase 6 — Deploy:** GitHub Actions + Pages, App Check.
   - [x] Workflow `.github/workflows/deploy.yml` (antecipado com autorização em 2026-11-21): no push para `main` roda `npm ci`, testes e build (Node 26) e publica `dist/` com `actions/deploy-pages`. Requer Settings → Pages → Source = "GitHub Actions".
-  - [ ] Falta: secrets `VITE_FIREBASE_*` no passo de build e App Check (dependem da Fase 5).
+  - [x] Secrets `VITE_FIREBASE_*` no passo de build (Fase 5).
+  - [ ] Falta: App Check.
 - [ ] **Fase 7 — Extras:** Desafio Diário, boss, conquistas, coleções, suporte mobile.
 
 ---

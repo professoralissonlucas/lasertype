@@ -1,5 +1,8 @@
 # Builds the game and publishes dist/ to GitHub Pages on every push to main (CLAUDE.md §10).
-# Not yet included: Firebase config (VITE_FIREBASE_* secrets) and App Check — Phases 5/6.
+# The Firebase web config comes from repository secrets (Settings → Secrets and variables →
+# Actions): VITE_FIREBASE_API_KEY, _AUTH_DOMAIN, _PROJECT_ID, _STORAGE_BUCKET,
+# _MESSAGING_SENDER_ID, _APP_ID. Without them the build still works, offline (no ranking).
+# Not yet included: App Check — Phase 6.
 name: Deploy
 
 on:
@@ -39,6 +42,13 @@ jobs:
 
       - name: Build (typecheck + vite build)
         run: npm run build
+        env:
+          VITE_FIREBASE_API_KEY: ${{ secrets.VITE_FIREBASE_API_KEY }}
+          VITE_FIREBASE_AUTH_DOMAIN: ${{ secrets.VITE_FIREBASE_AUTH_DOMAIN }}
+          VITE_FIREBASE_PROJECT_ID: ${{ secrets.VITE_FIREBASE_PROJECT_ID }}
+          VITE_FIREBASE_STORAGE_BUCKET: ${{ secrets.VITE_FIREBASE_STORAGE_BUCKET }}
+          VITE_FIREBASE_MESSAGING_SENDER_ID: ${{ secrets.VITE_FIREBASE_MESSAGING_SENDER_ID }}
+          VITE_FIREBASE_APP_ID: ${{ secrets.VITE_FIREBASE_APP_ID }}
 
       - name: Upload Pages artifact
         uses: actions/upload-pages-artifact@v5

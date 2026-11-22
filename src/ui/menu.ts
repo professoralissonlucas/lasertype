@@ -1,5 +1,5 @@
 // Main menu: mode, difficulty and language, then Play. Enter anywhere in the form plays.
-// Also shows the coin balance and leads to the shop and the settings.
+// Also shows the coin balance and the account, and leads to the shop, ranking and settings.
 import { GAME_DIFFICULTIES, type GameDifficulty } from '../game/types.ts';
 import { MODE_IDS, type ModeId } from '../modes/types.ts';
 import { LANGUAGES, type Language } from '../words/types.ts';
@@ -17,6 +17,7 @@ export interface MenuCallbacks {
   onChange(choice: MenuChoice): void;
   onSettings(): void;
   onShop(): void;
+  onRanking(): void;
 }
 
 export class MenuScreen {
@@ -34,6 +35,7 @@ export class MenuScreen {
     formatNumber: (value: number) => string,
     initial: MenuChoice,
     coins: number,
+    account: HTMLElement,
     callbacks: MenuCallbacks,
   ) {
     this.t = t;
@@ -96,6 +98,7 @@ export class MenuScreen {
     actions.append(
       this.playButton,
       button('btn', t('shop'), () => callbacks.onShop()),
+      button('btn', t('ranking'), () => callbacks.onRanking()),
       button('btn', t('settings'), () => callbacks.onSettings()),
     );
 
@@ -105,7 +108,7 @@ export class MenuScreen {
       callbacks.onPlay(this.choice);
     });
 
-    this.root.append(this.wallet, header, form);
+    this.root.append(account, this.wallet, header, form);
   }
 
   setCoins(coins: number): void {

@@ -62,7 +62,11 @@ export interface EconomyConfig {
   readonly rarityPrice: Readonly<Record<Rarity, number>>;
   /** Items in the daily shop (one of them discounted). */
   readonly shopSize: number;
-  /** Discounted price = floor(price × discountFactor / discountStep) × discountStep. */
-  readonly discountFactor: number;
+  /**
+   * Discounted price, integer math only (firestore.rules redoes it):
+   * floor(price × discountKeepTenths / (10 × discountStep)) × discountStep — with 7 and 10,
+   * floor(price × 7 / 100) × 10.
+   */
+  readonly discountKeepTenths: number;
   readonly discountStep: number;
 }

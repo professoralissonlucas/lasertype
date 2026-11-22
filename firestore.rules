@@ -1,10 +1,186 @@
 rules_version = '2';
 
-// Placeholder: deny everything until Phase 5 implements the real rules (see CLAUDE.md §9).
+// Laser Type — regras do Firestore
+// Este arquivo é o CONTRATO: o cliente deve se adequar a ele.
+// Publicar: Console Firebase → Firestore Database → Regras → colar → Publicar.
+
 service cloud.firestore {
   match /databases/{database}/documents {
-    match /{document=**} {
-      allow read, write: if false;
+
+    // ---------------------------------------------------------------
+    // Helpers gerais
+    // ---------------------------------------------------------------
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return signedIn() && request.auth.uid == uid;
+    }
+
+    // Conta vinculada ao Google (anônimos não entram no ranking)
+    function isGoogleLinked() {
+      return signedIn()
+        && ('google.com' in request.auth.token.firebase.identities);
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function changed() {
+      return request.resource.data.diff(resource.data).affectedKeys();
+    }
+
+    // Dia do jogo: vira às 03:00 UTC (meia-noite de Brasília) para todos.
+    // Deve bater com dayIndex() do cliente.
+    function dayIndex() {
+      return int(math.floor((request.time.toMillis() - 10800000) / 86400000));
+    }
+
+    // ---------------------------------------------------------------
+    // Loja
+    // ---------------------------------------------------------------
+    function shopItem(id) {
+      return get(/databases/$(database)/documents/shop/$(id)).data;
+    }
+
+    function discountedId() {
+      let order = get(/databases/$(database)/documents/shop/_config).data.discountOrder;
+      return order[dayIndex() % order.size()];
+    }
+
+    // Desconto de 30% em aritmética inteira: floor(price * 7 / 100) * 10
+    // Cliente deve usar exatamente: Math.floor(price * 7 / 100) * 10
+    function priceFor(id) {
+      let base = shopItem(id).price;
+      return id == discountedId()
+        ? int(math.floor(base * 7 / 100)) * 10
+        : base;
+    }
+
+    // ---------------------------------------------------------------
+    // Tipos de atualização permitidos em users/{uid}
+    // Cada escrita do cliente deve ser de UM destes tipos.
+    // ---------------------------------------------------------------
+
+    // Recompensa: até +150 moedas por escrita, intervalo mínimo de 30 s
+    function isReward() {
+      let gain = incoming().coins - existing().coins;
+      let xpGain = incoming().xp - existing().xp;
+      return changed().hasOnly(['coins', 'xp', 'level', 'stats', 'streak', 'lastLogin', 'lastReward'])
+        && incoming().coins is int
+        && incoming().xp is int
+        && incoming().lastReward == request.time
+        && request.time > existing().lastReward + duration.value(30, 's')
+        && gain >= 0 && gain <= 150
+        && xpGain >= 0 && xpGain <= 2000;
+    }
+
+    // Compra: exatamente 1 item novo (= lastPurchase), saldo cai o preço exato
+    function isPurchase() {
+      let id = incoming().lastPurchase;
+      let ownedDiff = incoming().owned.diff(existing().owned);
+      return changed().hasOnly(['coins', 'owned', 'lastPurchase'])
+        && id is string
+        && ownedDiff.affectedKeys().size() == 1
+        && ownedDiff.addedKeys().hasOnly([id])
+        && incoming().owned[id] == true
+        && shopItem(id).price is int
+        && incoming().coins == existing().coins - priceFor(id)
+        && incoming().coins >= 0;
+    }
+
+    // Equipar: só o mapa equipped (cosmético; não validado item a item)
+    function isEquip() {
+      return changed().hasOnly(['equipped'])
+        && incoming().equipped is map;
+    }
+
+    // Perfil: nome e foto
+    function validName(name) {
+      return name is string && name.size() >= 3 && name.size() <= 12;
+    }
+
+    function isProfile() {
+      return changed().hasOnly(['name', 'photo'])
+        && validName(incoming().name);
+    }
+
+    // ---------------------------------------------------------------
+    // users/{uid}
+    // ---------------------------------------------------------------
+    match /users/{uid} {
+      allow read: if isOwner(uid);
+
+      allow create: if isOwner(uid)
+        && incoming().keys().hasOnly(['name', 'photo', 'coins', 'xp', 'level', 'streak',
+                                      'lastLogin', 'owned', 'equipped', 'lastReward',
+                                      'lastPurchase', 'stats'])
+        && validName(incoming().name)
+        && incoming().coins == 0
+        && incoming().xp == 0
+        && incoming().owned is map
+        && incoming().owned.size() == 0
+        && incoming().lastReward == request.time;
+
+      allow update: if isOwner(uid)
+        && (isReward() || isPurchase() || isEquip() || isProfile());
+
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // scores/{scoreId}  — um documento por jogador/modo/dificuldade/idioma/dia
+    // id = `${uid}_${mode}_${diff}_${lang}_${day}`  (day = 0 fora do modo daily)
+    // ---------------------------------------------------------------
+
+    // Limite de plausibilidade: pontos por segundo de partida.
+    // Ajustar ao máximo teórico de scoring.ts.
+    function maxPointsPerSecond() {
+      return 1977;
+    }
+
+    function validScore(scoreId) {
+      let d = incoming();
+      return isGoogleLinked()
+        && d.uid == request.auth.uid
+        && d.keys().hasOnly(['uid', 'name', 'photo', 'score', 'wpm', 'accuracy', 'mode',
+                             'diff', 'lang', 'duration', 'day', 'createdAt'])
+        && d.keys().hasAll(['uid', 'name', 'score', 'wpm', 'accuracy', 'mode',
+                            'diff', 'lang', 'duration', 'day', 'createdAt'])
+        && validName(d.name)
+        && d.score is int && d.score >= 0
+        && d.wpm is number && d.wpm >= 0 && d.wpm <= 250
+        && d.accuracy is number && d.accuracy >= 0 && d.accuracy <= 100
+        && d.duration is number && d.duration > 0 && d.duration <= 3600
+        && d.score <= d.duration * maxPointsPerSecond()
+        && d.mode in ['survival', 'timeAttack', 'daily']
+        && d.diff in ['easy', 'normal', 'hard']
+        && d.lang in ['pt-BR', 'en']
+        && (d.mode != 'timeAttack' || d.duration <= 65)
+        && (d.mode == 'daily' ? d.day == dayIndex() : d.day == 0)
+        && d.createdAt == request.time
+        && scoreId == d.uid + '_' + d.mode + '_' + d.diff + '_' + d.lang + '_' + string(d.day);
+    }
+
+    match /scores/{scoreId} {
+      allow read: if true;
+      allow create: if validScore(scoreId);
+      allow update: if validScore(scoreId) && incoming().score > existing().score;
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------
+    // shop/{id} e shop/_config — somente leitura (gravados pelo script admin)
+    // ---------------------------------------------------------------
+    match /shop/{id} {
+      allow read: if true;
+      allow write: if false;
     }
   }
 }

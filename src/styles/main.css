@@ -1317,6 +1317,344 @@ kbd {
   font-size: 13px;
 }
 
+/* ---------- Small buttons, tabs ---------- */
+
+.btn--small {
+  padding: 6px 12px;
+  font-size: 11px;
+}
+
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid rgb(100 116 139 / 0.35);
+}
+
+.tabs__tab {
+  margin-bottom: -1px;
+  padding: 10px 16px;
+  border: 1px solid transparent;
+  border-radius: 4px 4px 0 0;
+  background: none;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  cursor: pointer;
+}
+
+.tabs__tab:hover {
+  color: var(--text);
+}
+
+.tabs__tab[aria-selected='true'] {
+  border-color: rgb(100 116 139 / 0.35);
+  border-bottom-color: rgb(5 7 15 / 0.97);
+  background: rgb(5 7 15 / 0.97);
+  color: var(--primary);
+}
+
+.tabs__tab:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
+
+/* ---------- Account badge ---------- */
+
+.account {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  padding: 4px 4px 4px 12px;
+  border: 1px solid rgb(100 116 139 / 0.4);
+  border-radius: 4px;
+  background: rgb(5 7 15 / 0.7);
+  font-size: 12px;
+  letter-spacing: 0.1em;
+}
+
+.account__label {
+  color: var(--muted);
+  text-transform: uppercase;
+}
+
+.account[data-status='google'] .account__label {
+  color: var(--primary);
+  font-family: var(--font-mono);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.account[data-status='connecting'] {
+  padding-right: 12px;
+}
+
+.menu__account {
+  position: absolute;
+  top: 16px;
+  left: 16px;
+}
+
+/* ---------- Ranking ---------- */
+
+.ranking {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  background: rgb(5 7 15 / 0.55);
+}
+
+.ranking__panel {
+  width: min(760px, 100%);
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+}
+
+.ranking__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+
+.ranking__header .panel__title {
+  margin: 0;
+}
+
+.ranking__filters {
+  display: grid;
+  grid-template-columns: 3fr 2fr;
+  gap: 16px;
+}
+
+.ranking__table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.ranking__table th {
+  padding: 6px 10px;
+  border-bottom: 1px solid rgb(100 116 139 / 0.35);
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 400;
+  letter-spacing: 0.14em;
+  text-align: left;
+  text-transform: uppercase;
+}
+
+.ranking__table td {
+  padding: 7px 10px;
+  border-bottom: 1px solid rgb(100 116 139 / 0.15);
+}
+
+.ranking__table .col-rank {
+  width: 3em;
+  color: var(--muted);
+  font-family: var(--font-mono);
+}
+
+.ranking__table .col-num {
+  font-family: var(--font-mono);
+  text-align: right;
+  white-space: nowrap;
+}
+
+.ranking__table th.col-num {
+  text-align: right;
+}
+
+.ranking__table .col-score {
+  color: var(--combo);
+}
+
+.ranking__table tbody tr:nth-child(-n + 3) .col-rank {
+  color: var(--combo);
+}
+
+.ranking__name {
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+
+.ranking__you {
+  margin-left: 8px;
+  padding: 0 5px;
+  border-radius: 2px;
+  background: rgb(34 211 238 / 0.2);
+  color: var(--primary);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.ranking__table tr.is-you td {
+  background: rgb(34 211 238 / 0.08);
+}
+
+.ranking__table tr.is-you td:first-child {
+  box-shadow: inset 3px 0 0 var(--primary);
+}
+
+.ranking__own tr:first-child td {
+  border-top: 2px dashed rgb(100 116 139 / 0.4);
+}
+
+.ranking__status {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  min-height: 120px;
+  color: var(--muted);
+  font-size: 13px;
+  text-align: center;
+}
+
+.ranking[data-view='error'] .ranking__status {
+  color: var(--danger);
+}
+
+/* ---------- Mission Report: ranking line ---------- */
+
+.report__rank {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 10px 16px;
+  margin: -10px 0 20px;
+  padding: 8px 12px;
+  border-left: 3px solid var(--muted);
+  background: rgb(100 116 139 / 0.08);
+  font-size: 12px;
+  letter-spacing: 0.06em;
+}
+
+.report__rank[data-tone='record'] {
+  border-left-color: var(--combo);
+  color: var(--combo);
+}
+
+.report__rank[data-tone='error'] {
+  border-left-color: var(--danger);
+  color: var(--danger);
+}
+
+/* ---------- Toasts ---------- */
+
+.toasts {
+  position: absolute;
+  bottom: 24px;
+  left: 50%;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  width: min(520px, calc(100% - 32px));
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.toast {
+  padding: 10px 16px;
+  border: 1px solid var(--primary);
+  border-radius: 4px;
+  background: rgb(5 7 15 / 0.95);
+  box-shadow: 0 0 24px rgb(0 0 0 / 0.5);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.4;
+  text-align: center;
+  animation: toast-in 0.25s ease-out;
+}
+
+.toast--warn {
+  border-color: var(--combo);
+}
+
+@keyframes toast-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* ---------- Nickname dialog ---------- */
+
+.overlay--dialog {
+  z-index: 5;
+}
+
+.nickname {
+  width: min(460px, 100%);
+  text-align: left;
+}
+
+.nickname .panel__title {
+  font-size: 18px;
+}
+
+.nickname .panel__actions--row {
+  justify-content: flex-start;
+}
+
+.nickname__hint {
+  margin: -8px 0 16px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.nickname__field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.nickname__label {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+}
+
+.nickname__input {
+  padding: 10px 12px;
+  border: 1px solid var(--muted);
+  border-radius: 4px;
+  background: rgb(5 7 15 / 0.8);
+  color: var(--text);
+  font-family: var(--font-mono);
+  font-size: 18px;
+}
+
+.nickname__input:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 1px;
+  border-color: var(--primary);
+}
+
+.nickname__error {
+  min-height: 1.4em;
+  margin: 6px 0 14px;
+  color: var(--danger);
+  font-size: 12px;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: default;
+  box-shadow: none;
+}
+
 /* ---------- Small screens (mobile support is Phase 7) ---------- */
 
 /* Below 1000 px the field takes the whole width (see LAYOUT.sideReserveMinWidth):
@@ -1358,6 +1696,19 @@ kbd {
   .menu__wallet {
     position: static;
     align-self: center;
+  }
+
+  .menu__account {
+    position: static;
+    align-self: center;
+  }
+
+  .ranking__filters {
+    grid-template-columns: 1fr;
+  }
+
+  .ranking__table .col-acc {
+    display: none;
   }
 
   .shop__offers,

@@ -10,6 +10,16 @@ import { DIFFICULTY_LABEL, GRADE_LABEL, MODE_LABEL, type StringKey, type Transla
 export interface ReportCallbacks {
   onPlayAgain(): void;
   onMenu(): void;
+  /** Must call AuthService.linkGoogle() synchronously (the popup opens in the click). */
+  onSignIn(): void;
+}
+
+/** The ranking line under the coins: what happened to this match in the global ranking. */
+export interface RankingLine {
+  readonly text: string;
+  readonly tone: 'record' | 'info' | 'error';
+  /** Show "Entrar com Google" (anonymous player). */
+  readonly signIn: boolean;
 }
 
 const END_TITLE: Readonly<Record<EndReason, StringKey>> = {
@@ -44,6 +54,9 @@ export class ReportScreen {
   private readonly coinsValue: HTMLElement;
   private readonly coinsDetail: HTMLElement;
   private readonly balance: HTMLElement;
+  private readonly rankLine: HTMLElement;
+  private readonly rankText: HTMLElement;
+  private readonly rankSignIn: HTMLButtonElement;
   private readonly stats: Record<StatKey, HTMLElement>;
 
   constructor(t: Translate, formatScore: (value: number) => string, callbacks: ReportCallbacks) {
@@ -109,7 +122,15 @@ export class ReportScreen {
       button('btn', t('toMenu'), () => callbacks.onMenu(), 'Esc'),
     );
 
-    panel.append(title, this.subtitle, summary, coins, list, actions);
+    // Global ranking status (filled in when the submission finishes).
+    this.rankLine = el('div', 'report__rank');
+    this.rankLine.hidden = true;
+    this.rankText = el('span', 'report__rank-text');
+    this.rankText.setAttribute('aria-live', 'polite');
+    this.rankSignIn = button('btn btn--small', t('accountSignIn'), () => callbacks.onSignIn());
+    this.rankLine.append(this.rankText, this.rankSignIn);
+
+    panel.append(title, this.subtitle, summary, coins, this.rankLine, list, actions);
     this.root.append(panel);
   }
 
@@ -144,6 +165,15 @@ export class ReportScreen {
     };
     for (const key of STAT_KEYS) this.stats[key].textContent = values[key];
     this.root.hidden = false;
+  }
+
+  /** null hides the line (offline build). */
+  setRanking(line: RankingLine | null): void {
+    this.rankLine.hidden = line === null;
+    if (!line) return;
+    this.rankLine.dataset.tone = line.tone;
+    this.rankText.textContent = line.text;
+    this.rankSignIn.hidden = !line.signIn;
   }
 
   hide(): void {

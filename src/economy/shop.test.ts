@@ -9,16 +9,19 @@ const DAY = dayIndex(Date.parse('2026-11-22T12:00:00Z'));
 const days = (count: number): number[] => Array.from({ length: count }, (_, i) => DAY + i);
 
 describe('discountedPrice', () => {
-  it('is floor(price × 0.7 / 10) × 10 for every rarity price', () => {
+  it('is Math.floor(price * 7 / 100) * 10 for every rarity price (firestore.rules)', () => {
     expect(discountedPrice(300)).toBe(210);
     expect(discountedPrice(900)).toBe(630);
     expect(discountedPrice(2500)).toBe(1750);
     expect(discountedPrice(6000)).toBe(4200);
   });
 
-  it('rounds down to a multiple of 10', () => {
-    expect(discountedPrice(1234)).toBe(860); // 863.8 → 860
+  it('rounds down to a multiple of 10, in integer math', () => {
+    expect(discountedPrice(1234)).toBe(860); // 8638 / 100 → 86 → 860
     expect(discountedPrice(15)).toBe(10);
+    for (let price = 0; price <= 10_000; price += 10) {
+      expect(discountedPrice(price)).toBe(Math.floor((price * 7) / 100) * 10);
+    }
   });
 });
 
@@ -73,7 +76,7 @@ describe('dailyShop', () => {
     expect(deal?.discounted).toBe(true);
     const base = getItem(deal?.itemId ?? '')?.price ?? 0;
     expect(deal?.basePrice).toBe(base);
-    expect(deal?.price).toBe(Math.floor((base * 0.7) / 10) * 10);
+    expect(deal?.price).toBe(Math.floor((base * 7) / 100) * 10);
     for (const offer of others) {
       expect(offer.discounted).toBe(false);
       expect(offer.price).toBe(getItem(offer.itemId)?.price);

@@ -1,8 +1,8 @@
 // Rotating daily shop (pure). Everyone sees the same 4 items on the same game day
 // (03:00 UTC → 03:00 UTC, see utils/day.ts):
 // - the discounted item comes from a fixed list, no rng:
-//     DISCOUNT_ORDER[dayIndex % DISCOUNT_ORDER.length], price floor(price × 0.7 / 10) × 10
-//   so the Firestore rules can redo the math and check the price paid;
+//     DISCOUNT_ORDER[dayIndex % DISCOUNT_ORDER.length], price Math.floor(price * 7 / 100) * 10
+//   (integer math, exactly as firestore.rules), so the rules can check the price paid;
 // - the other 3 are drawn with seed "shop:YYYY-MM-DD", excluding the discounted one,
 //   preferring categories not in the shop yet.
 import { CONFIG } from '../config.ts';
@@ -12,9 +12,10 @@ import { dayKeyOf } from '../utils/day.ts';
 import { createRng, shuffled } from '../utils/rng.ts';
 import type { DailyShop, EconomyConfig, ShopOffer } from './types.ts';
 
-/** floor(price × 0.7 / 10) × 10 (e.g. 900 → 630). */
+/** Math.floor(price * 7 / 100) * 10 (e.g. 900 → 630), integer math as in firestore.rules. */
 export function discountedPrice(price: number, config: EconomyConfig = CONFIG.economy): number {
-  return Math.floor((price * config.discountFactor) / config.discountStep) * config.discountStep;
+  const step = config.discountStep;
+  return Math.floor((price * config.discountKeepTenths) / (10 * step)) * step;
 }
 
 /** DISCOUNT_ORDER[day % length] (wrapped so days before 1970 also work). */
