@@ -1,27 +1,62 @@
 // firestore.rules is the contract: these tests fail when the client and the rules drift
-// apart (identifier lists, limits, maxPointsPerSecond, day arithmetic, discount, doc id).
+// apart (identifier lists, limits, maxPointsPerSecond, day arithmetic, discount, doc ids,
+// the fields of every users/{uid} write and the shop documents the seed writes).
 import { describe, expect, it } from 'vitest';
 import rules from '../../firestore.rules?raw';
 import { CONFIG } from '../config.ts';
+import { DISCOUNT_ORDER } from '../cosmetics/catalog.ts';
+import shopSource from '../economy/shop.ts?raw';
+import { discountedPrice } from '../economy/shop.ts';
 import { comboMultiplier, maxPointsPerSecond } from '../game/scoring.ts';
 import { GAME_DIFFICULTIES } from '../game/types.ts';
 import { DAY_MS, DAY_START_OFFSET_MS } from '../utils/day.ts';
 import { longestWordLength } from '../words/index.ts';
 import { LANGUAGES } from '../words/types.ts';
 import { buildScore, MAX_POINTS_PER_SECOND, scoreDocId } from './leaderboard.ts';
+import { equipFields, newUserFields, profileFields, purchaseFields, rewardFields } from './profile.ts';
+import { SHOP, SHOP_CONFIG_ID, shopDocuments } from './shopDocs.ts';
 import { RANKED_MODES } from './types.ts';
 
-/** First capture group of `pattern` in the rules (fails loudly when the rules changed shape). */
-function capture(pattern: RegExp): string {
-  const match = pattern.exec(rules);
+/** First capture group of `pattern` (fails loudly when the rules changed shape). */
+function capture(pattern: RegExp, source: string = rules): string {
+  const match = pattern.exec(source);
   if (!match?.[1]) throw new Error(`firestore.rules: no match for ${pattern}`);
   return match[1];
 }
 
 /** `['a', 'b']` → ['a', 'b'] */
-function list(pattern: RegExp): string[] {
-  return [...capture(pattern).matchAll(/'([^']*)'/g)].map((m) => m[1] ?? '');
+function list(pattern: RegExp, source: string = rules): string[] {
+  return [...capture(pattern, source).matchAll(/'([^']*)'/g)].map((m) => m[1] ?? '');
 }
+
+/** The text of `function name(...) { ... }` in the rules, up to the next function. */
+function ruleFunction(name: string): string {
+  const start = rules.indexOf(`function ${name}(`);
+  if (start < 0) throw new Error(`firestore.rules: no function ${name}`);
+  const next = rules.indexOf('function ', start + 1);
+  return rules.slice(start, next < 0 ? undefined : next);
+}
+
+/** The `allow create` rule of users/{uid}. */
+function userCreateRule(): string {
+  const start = rules.indexOf('allow create: if isOwner(uid)');
+  const end = rules.indexOf('allow update: if isOwner(uid)');
+  if (start < 0 || end < start) throw new Error('firestore.rules: no users/{uid} create rule');
+  return rules.slice(start, end);
+}
+
+/** Top-level fields a write touches ('owned.x' is a field path inside `owned`). */
+function topLevel(fields: object): string[] {
+  return [...new Set(Object.keys(fields).map((key) => key.split('.')[0] ?? key))].sort();
+}
+
+/** What `changed().hasOnly([...])` allows in a rules function. */
+function allowedChanges(fn: string): string[] {
+  return list(/changed\(\)\.hasOnly\((\[[^\]]*\])/, ruleFunction(fn)).sort();
+}
+
+/** Stands in for serverTimestamp() (= request.time on the server). */
+const SERVER_TIME = { serverTimestamp: true } as const;
 
 describe('firestore.rules ↔ client', () => {
   it('maxPointsPerSecond is the theoretical maximum of scoring.ts, rounded up', () => {
@@ -72,8 +107,70 @@ describe('firestore.rules ↔ client', () => {
 
   it('the discount uses the same integer math as economy/shop.ts', () => {
     expect(rules).toContain('int(math.floor(base * 7 / 100)) * 10');
-    const { discountKeepTenths, discountStep } = CONFIG.economy;
-    expect([discountKeepTenths, 10 * discountStep, discountStep]).toEqual([7, 100, 10]);
+    expect(shopSource).toMatch(/return Math\.floor\(price \* 7 \/ 100\) \* 10;/);
+    for (const price of Object.values(CONFIG.economy.rarityPrice)) {
+      expect(discountedPrice(price)).toBe(Math.floor(price * 7 / 100) * 10);
+    }
+  });
+});
+
+describe('users/{uid} writes ↔ firestore.rules', () => {
+  it('creation: only allowed keys, coins 0, xp 0, owned {} and lastReward = request.time', () => {
+    const create = userCreateRule();
+    const allowed = list(/incoming\(\)\.keys\(\)\.hasOnly\((\[[^\]]*\])/, create);
+    const fields = newUserFields('Piloto1234', SERVER_TIME);
+    expect(Object.keys(fields).filter((key) => !allowed.includes(key))).toEqual([]);
+    expect(create).toContain('incoming().coins == 0');
+    expect(create).toContain('incoming().xp == 0');
+    expect(create).toContain('incoming().owned.size() == 0');
+    expect(create).toContain('incoming().lastReward == request.time');
+    expect(fields).toMatchObject({ name: 'Piloto1234', coins: 0, xp: 0, owned: {}, lastReward: SERVER_TIME });
+    // Privacy: never the Google photo.
+    expect('photo' in fields).toBe(false);
+  });
+
+  it('reward: only reward fields, at most +150 coins, 30 s apart (CONFIG.sync)', () => {
+    const fn = ruleFunction('isReward');
+    const fields = rewardFields(40, 150, SERVER_TIME);
+    expect(fields).toEqual({ coins: 190, lastReward: SERVER_TIME });
+    expect(allowedChanges('isReward')).toEqual(['coins', 'lastLogin', 'lastReward', 'level', 'stats', 'streak', 'xp']);
+    expect(topLevel(fields).filter((key) => !allowedChanges('isReward').includes(key))).toEqual([]);
+    expect(Number(capture(/gain <= (\d+)/, fn))).toBe(CONFIG.sync.maxRewardPerWrite);
+    expect(Number(capture(/duration\.value\((\d+), 's'\)/, fn))).toBe(CONFIG.sync.rewardIntervalSeconds);
+    expect(fn).toContain('incoming().lastReward == request.time');
+  });
+
+  it('purchase: coins, exactly one new owned key (= lastPurchase), price from shop/', () => {
+    const fn = ruleFunction('isPurchase');
+    const fields = purchaseFields(1000, 'cannon_twin', 900);
+    expect(fields).toEqual({ coins: 100, 'owned.cannon_twin': true, lastPurchase: 'cannon_twin' });
+    expect(topLevel(fields)).toEqual(allowedChanges('isPurchase'));
+    expect(fn).toContain('ownedDiff.addedKeys().hasOnly([id])');
+    expect(fn).toContain('incoming().coins == existing().coins - priceFor(id)');
+    expect(() => purchaseFields(1000, 'a.b', 10)).toThrow();
+  });
+
+  it('equip: only the equipped map', () => {
+    expect(topLevel(equipFields({ theme: 'theme_void' }))).toEqual(allowedChanges('isEquip'));
+  });
+
+  it('profile: only the name (no photo)', () => {
+    expect(allowedChanges('isProfile')).toEqual(['name', 'photo']);
+    expect(topLevel(profileFields('Ana'))).toEqual(['name']);
+  });
+});
+
+describe('shop collection (scripts/seed-shop.ts) ↔ firestore.rules', () => {
+  it('has the documents and fields the rules read', () => {
+    expect(rules).toContain(`documents/${SHOP}/$(id)`);
+    expect(rules).toContain('shopItem(id).price');
+    expect(rules).toContain(`documents/${SHOP}/${SHOP_CONFIG_ID}).data.discountOrder`);
+    const docs = shopDocuments();
+    for (const doc of Object.values(docs.items)) {
+      expect(Object.keys(doc).sort()).toEqual(['price', 'rarity', 'type']);
+      expect(Number.isInteger(doc.price) && doc.price > 0).toBe(true);
+    }
+    expect(docs.config.discountOrder).toEqual(DISCOUNT_ORDER);
   });
 });
 

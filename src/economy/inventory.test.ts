@@ -1,6 +1,18 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_ITEM_IDS } from '../cosmetics/catalog.ts';
-import { emptyInventory, equip, equippedId, grantCoins, isEquipped, isOwned, parseInventory, purchase } from './inventory.ts';
+import {
+  applyPurchase,
+  checkPurchase,
+  emptyInventory,
+  equip,
+  equippedId,
+  grantCoins,
+  isEquipped,
+  isOwned,
+  parseInventory,
+  purchase,
+  sameInventory,
+} from './inventory.ts';
 import type { DailyShop, Inventory } from './types.ts';
 
 const SHOP: DailyShop = {
@@ -65,6 +77,28 @@ describe('purchase', () => {
     const inv = rich(1000);
     purchase(inv, SHOP, 'laser_emerald');
     expect(inv).toEqual(rich(1000));
+  });
+
+  it('checkPurchase returns today’s offer; applyPurchase pays a given price', () => {
+    expect(checkPurchase(rich(1000), SHOP, 'laser_emerald')).toEqual({ ok: true, offer: SHOP.offers[0] });
+    expect(checkPurchase(rich(10), SHOP, 'laser_emerald')).toEqual({ ok: false, error: 'insufficient' });
+    expect(applyPurchase(rich(1000), 'cannon_halo', 600)).toEqual({
+      coins: 400,
+      owned: { cannon_halo: true },
+      equipped: {},
+      lastPurchase: 'cannon_halo',
+    });
+  });
+});
+
+describe('sameInventory', () => {
+  it('compares coins, items, equipment and last purchase by value', () => {
+    const a: Inventory = { coins: 5, owned: { cannon_halo: true }, equipped: { cannon: 'cannon_halo' }, lastPurchase: 'cannon_halo' };
+    expect(sameInventory(a, JSON.parse(JSON.stringify(a)) as Inventory)).toBe(true);
+    expect(sameInventory(a, { ...a, coins: 6 })).toBe(false);
+    expect(sameInventory(a, { ...a, owned: {} })).toBe(false);
+    expect(sameInventory(a, { ...a, equipped: {} })).toBe(false);
+    expect(sameInventory(a, { ...a, lastPurchase: null })).toBe(false);
   });
 });
 

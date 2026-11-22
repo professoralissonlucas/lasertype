@@ -1,0 +1,434 @@
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { CONFIG } from '../config.ts';
+import {
+  equipFields,
+  profileFields,
+  purchaseFields,
+  rewardFields,
+  type OpenedUser,
+  type PurchaseAttempt,
+  type UserBackend,
+  type UserSnapshot,
+} from '../firebase/profile.ts';
+import { defaultNickname } from '../profile/nickname.ts';
+import { memoryStore } from '../utils/storage.ts';
+import { CLOUD_CACHE_KEY, FirestoreInventoryRepository } from './firestoreRepository.ts';
+import { INVENTORY_KEY } from './repository.ts';
+import type { Equipped, Inventory } from './types.ts';
+
+const NOON = Date.parse('2026-11-22T12:00:00Z');
+const MAX = CONFIG.sync.maxRewardPerWrite;
+const INTERVAL_MS = CONFIG.sync.rewardIntervalSeconds * 1000;
+
+const firestoreError = (code: string) => Object.assign(new Error(code), { code });
+
+interface ServerDoc {
+  coins: number;
+  owned: Record<string, true>;
+  equipped: Equipped;
+  lastPurchase: string | null;
+  name: string;
+  lastReward: number;
+}
+
+interface Write {
+  readonly kind: 'create' | 'reward' | 'purchase' | 'equip' | 'profile';
+  readonly uid: string;
+  /** Top-level fields the write touched. */
+  readonly fields: readonly string[];
+  readonly amount?: number;
+  readonly at: number;
+}
+
+const topLevel = (fields: object): string[] => [...new Set(Object.keys(fields).map((key) => key.split('.')[0] ?? key))].sort();
+
+/** Firestore stand-in that enforces the same limits as firestore.rules (on its own clock). */
+class FakeServer implements UserBackend {
+  readonly docs = new Map<string, ServerDoc>();
+  readonly writes: Write[] = [];
+  offline = false;
+  refuseRewards = 0;
+  refusePurchases = false;
+  private active = 0;
+  maxActive = 0;
+
+  seed(uid: string, doc: Partial<ServerDoc> = {}): void {
+    this.docs.set(uid, {
+      coins: 0,
+      owned: {},
+      equipped: {},
+      lastPurchase: null,
+      name: 'Servidor',
+      lastReward: Date.now() - 3_600_000,
+      ...doc,
+    });
+  }
+
+  doc(uid: string): ServerDoc {
+    const doc = this.docs.get(uid);
+    if (!doc) throw new Error(`no doc ${uid}`);
+    return doc;
+  }
+
+  private snapshot(doc: ServerDoc): UserSnapshot {
+    const inventory: Inventory = {
+      coins: doc.coins,
+      owned: { ...doc.owned },
+      equipped: { ...doc.equipped },
+      lastPurchase: doc.lastPurchase,
+    };
+    return { inventory, name: doc.name, lastReward: doc.lastReward };
+  }
+
+  /** Every call takes a network round trip; counts overlapping calls. */
+  private async call<T>(body: () => T): Promise<T> {
+    this.active++;
+    this.maxActive = Math.max(this.maxActive, this.active);
+    try {
+      await Promise.resolve();
+      if (this.offline) throw firestoreError('unavailable');
+      return body();
+    } finally {
+      this.active--;
+    }
+  }
+
+  open(uid: string, name: string): Promise<OpenedUser> {
+    return this.call(() => {
+      const existing = this.docs.get(uid);
+      if (existing) return { snapshot: this.snapshot(existing), created: false };
+      this.seed(uid, { name, lastReward: Date.now() });
+      this.writes.push({ kind: 'create', uid, fields: [], at: Date.now() });
+      return { snapshot: { ...this.snapshot(this.doc(uid)), lastReward: null }, created: true };
+    });
+  }
+
+  reward(uid: string, amount: number): Promise<UserSnapshot> {
+    return this.call(() => {
+      const doc = this.doc(uid);
+      const now = Date.now();
+      // isReward: 0 ≤ gain ≤ 150 and request.time > lastReward + 30 s.
+      if (this.refuseRewards > 0 || amount > MAX || amount < 0 || !(now > doc.lastReward + INTERVAL_MS)) {
+        this.refuseRewards = Math.max(0, this.refuseRewards - 1);
+        throw firestoreError('permission-denied');
+      }
+      const fields = rewardFields(doc.coins, amount, now);
+      doc.coins = fields.coins;
+      doc.lastReward = now;
+      this.writes.push({ kind: 'reward', uid, fields: topLevel(fields), amount, at: now });
+      return { ...this.snapshot(doc), lastReward: null };
+    });
+  }
+
+  purchase(uid: string, itemId: string, price: number): Promise<PurchaseAttempt> {
+    return this.call((): PurchaseAttempt => {
+      const doc = this.doc(uid);
+      if (doc.owned[itemId]) return { kind: 'owned', snapshot: this.snapshot(doc) };
+      if (doc.coins < price) return { kind: 'insufficient', snapshot: this.snapshot(doc) };
+      if (this.refusePurchases) throw firestoreError('permission-denied');
+      const fields = purchaseFields(doc.coins, itemId, price);
+      doc.coins -= price;
+      doc.owned = { ...doc.owned, [itemId]: true };
+      doc.lastPurchase = itemId;
+      this.writes.push({ kind: 'purchase', uid, fields: topLevel(fields), at: Date.now() });
+      return { kind: 'bought', snapshot: this.snapshot(doc) };
+    });
+  }
+
+  equip(uid: string, equipped: Equipped): Promise<void> {
+    return this.call(() => {
+      const fields = equipFields(equipped);
+      this.doc(uid).equipped = { ...fields.equipped };
+      this.writes.push({ kind: 'equip', uid, fields: topLevel(fields), at: Date.now() });
+    });
+  }
+
+  rename(uid: string, name: string): Promise<void> {
+    return this.call(() => {
+      const fields = profileFields(name);
+      this.doc(uid).name = name;
+      this.writes.push({ kind: 'profile', uid, fields: topLevel(fields), at: Date.now() });
+    });
+  }
+
+  kinds(): string[] {
+    return this.writes.map((write) => write.kind);
+  }
+}
+
+function setup(initial: Record<string, string> = {}) {
+  const store = memoryStore(initial);
+  const server = new FakeServer();
+  const make = () => new FirestoreInventoryRepository({ store, backend: async () => server });
+  return { store, server, make, repo: make() };
+}
+
+/** Lets queued writes and due timers run. */
+const settle = (ms = 0) => vi.advanceTimersByTimeAsync(ms);
+
+beforeEach(() => {
+  vi.useFakeTimers({ now: NOON });
+});
+
+afterEach(() => {
+  vi.useRealTimers();
+});
+
+describe('FirestoreInventoryRepository — first session', () => {
+  it('creates users/{uid} with "Piloto" + 4 digits, 0 coins and nothing owned', async () => {
+    const { repo, server } = setup();
+    repo.setUser('u1');
+    await settle();
+    expect(server.kinds()).toEqual(['create']);
+    expect(server.doc('u1')).toMatchObject({ coins: 0, owned: {}, name: defaultNickname('u1'), lastReward: NOON });
+    expect(repo.name).toBe(defaultNickname('u1'));
+    expect(repo.name).toMatch(/^Piloto[0-9]{4}$/);
+  });
+
+  it('reads an existing document instead of creating it', async () => {
+    const { repo, server } = setup();
+    server.seed('u1', { coins: 700, owned: { theme_void: true }, equipped: { theme: 'theme_void' }, name: 'Ana' });
+    const seen: Inventory[] = [];
+    repo.subscribe((inventory) => seen.push(inventory));
+    repo.setUser('u1');
+    await settle();
+    expect(server.writes).toEqual([]);
+    expect(repo.load()).toMatchObject({ coins: 700, owned: { theme_void: true }, equipped: { theme: 'theme_void' } });
+    expect(repo.name).toBe('Ana');
+    expect(seen.at(-1)?.coins).toBe(700);
+  });
+
+  it('ignores the old offline-phase progress (lasertype.inventory.v1)', () => {
+    const { repo } = setup({ [INVENTORY_KEY]: JSON.stringify({ coins: 5000, owned: { cannon_halo: true } }) });
+    expect(repo.load()).toMatchObject({ coins: 0, owned: {} });
+  });
+
+  it('shows the cache of the last account at once (before the auth answers)', async () => {
+    const first = setup();
+    first.server.seed('u1', { coins: 420 });
+    first.repo.setUser('u1');
+    await settle();
+    expect(first.make().load().coins).toBe(420);
+  });
+});
+
+describe('FirestoreInventoryRepository — rewards', () => {
+  it('shows coins at once and sends them 30 s after the previous reward write', async () => {
+    const { repo, server } = setup();
+    repo.setUser('u1'); // created now: lastReward = NOON
+    await settle();
+    expect(repo.reward(100).coins).toBe(100);
+    expect(repo.pendingCoins).toBe(100);
+    await settle(INTERVAL_MS - 1000);
+    expect(server.doc('u1').coins).toBe(0);
+    await settle(5000);
+    expect(server.doc('u1').coins).toBe(100);
+    expect(repo.pendingCoins).toBe(0);
+    expect(repo.load().coins).toBe(100);
+    expect(server.writes.at(-1)).toMatchObject({ kind: 'reward', fields: ['coins', 'lastReward'], amount: 100 });
+  });
+
+  it('splits big rewards into writes of at most 150, 30 s apart, losing nothing', async () => {
+    const { repo, server } = setup();
+    repo.setUser('u1');
+    await settle();
+    repo.reward(100);
+    repo.reward(100);
+    repo.reward(100);
+    repo.reward(100);
+    expect(repo.load().coins).toBe(400);
+    await settle(5 * 60_000);
+    const rewards = server.writes.filter((write) => write.kind === 'reward');
+    expect(rewards.map((write) => write.amount)).toEqual([150, 150, 100]);
+    for (let i = 1; i < rewards.length; i++) {
+      expect((rewards[i]?.at ?? 0) - (rewards[i - 1]?.at ?? 0)).toBeGreaterThan(INTERVAL_MS);
+    }
+    expect(server.doc('u1').coins).toBe(400);
+    expect(repo.load().coins).toBe(400);
+  });
+
+  it('keeps refused rewards pending and sends them later', async () => {
+    const { repo, server } = setup();
+    repo.setUser('u1');
+    await settle();
+    server.refuseRewards = 2;
+    repo.reward(90);
+    await settle(10 * 60_000);
+    expect(server.doc('u1').coins).toBe(90);
+    expect(repo.pendingCoins).toBe(0);
+  });
+
+  it('keeps pending coins through the network going down', async () => {
+    const { repo, server } = setup();
+    repo.setUser('u1');
+    await settle();
+    server.offline = true;
+    repo.reward(60);
+    await settle(3 * 60_000);
+    expect(repo.load().coins).toBe(60);
+    expect(server.doc('u1').coins).toBe(0);
+    server.offline = false;
+    await settle(5 * 60_000);
+    expect(server.doc('u1').coins).toBe(60);
+  });
+
+  it('keeps pending coins in the cache for the next session', async () => {
+    const { repo, server, make, store } = setup();
+    repo.setUser('u1');
+    await settle();
+    repo.reward(80); // the tab closes before the 30 s
+    expect(JSON.parse(store.data.get(CLOUD_CACHE_KEY) ?? '{}')).toMatchObject({ last: 'u1', users: { u1: { pending: 80 } } });
+
+    const next = make();
+    expect(next.load().coins).toBe(80);
+    next.setUser('u1');
+    await settle(INTERVAL_MS + 5000);
+    expect(server.doc('u1').coins).toBe(80);
+  });
+
+  it('coins earned before any account answered go to the first account that does', async () => {
+    const { repo, server } = setup();
+    expect(repo.name).toBeNull();
+    repo.reward(50);
+    expect(repo.load().coins).toBe(50);
+    repo.setUser('u1');
+    await settle(INTERVAL_MS + 5000);
+    expect(server.doc('u1').coins).toBe(50);
+  });
+});
+
+describe('FirestoreInventoryRepository — purchases', () => {
+  it('buys in a transaction: coins, one owned key and lastPurchase', async () => {
+    const { repo, server } = setup();
+    server.seed('u1', { coins: 1000 });
+    repo.setUser('u1');
+    await settle();
+    const result = await repo.purchase('cannon_twin', 900);
+    expect(result).toEqual({ ok: true, inventory: expect.objectContaining({ coins: 100, lastPurchase: 'cannon_twin' }) });
+    expect(server.doc('u1')).toMatchObject({ coins: 100, owned: { cannon_twin: true }, lastPurchase: 'cannon_twin' });
+    expect(server.writes.at(-1)).toMatchObject({ kind: 'purchase', fields: ['coins', 'lastPurchase', 'owned'] });
+  });
+
+  it('a purchase refused by the rules charges nothing', async () => {
+    const { repo, server } = setup();
+    server.seed('u1', { coins: 1000 });
+    repo.setUser('u1');
+    await settle();
+    server.refusePurchases = true;
+    expect(await repo.purchase('cannon_twin', 900)).toEqual({ ok: false, error: 'refused' });
+    expect(repo.load().coins).toBe(1000);
+    expect(repo.load().owned).toEqual({});
+  });
+
+  it('is offline without an account or a connection', async () => {
+    const { repo, server } = setup();
+    expect(await repo.purchase('cannon_twin', 900)).toEqual({ ok: false, error: 'offline' });
+    server.offline = true;
+    repo.setUser('u1');
+    await settle();
+    expect(await repo.purchase('cannon_twin', 900)).toEqual({ ok: false, error: 'offline' });
+  });
+
+  it('enough coins only counting the pending ones → syncing', async () => {
+    const { repo } = setup();
+    repo.setUser('u1');
+    await settle();
+    repo.reward(500);
+    expect(await repo.purchase('laser_emerald', 300)).toEqual({ ok: false, error: 'syncing' });
+  });
+
+  it('takes the server’s word when the item was bought on another device', async () => {
+    const { repo, server } = setup();
+    server.seed('u1', { coins: 1000 });
+    repo.setUser('u1');
+    await settle();
+    server.doc('u1').owned = { cannon_twin: true };
+    server.doc('u1').coins = 100;
+    expect(await repo.purchase('cannon_twin', 900)).toEqual({ ok: false, error: 'owned' });
+    expect(repo.load()).toMatchObject({ coins: 100, owned: { cannon_twin: true } });
+  });
+});
+
+describe('FirestoreInventoryRepository — equip and nickname', () => {
+  it('equip is its own write (only `equipped`), shown at once', async () => {
+    const { repo, server } = setup();
+    server.seed('u1', { owned: { theme_void: true } });
+    repo.setUser('u1');
+    await settle();
+    expect(repo.equip({ theme: 'theme_void' }).equipped).toEqual({ theme: 'theme_void' });
+    await settle();
+    expect(server.writes.at(-1)).toMatchObject({ kind: 'equip', fields: ['equipped'] });
+    expect(server.doc('u1').equipped).toEqual({ theme: 'theme_void' });
+  });
+
+  it('an equip made offline is written once the connection is back', async () => {
+    const { repo, server } = setup();
+    server.seed('u1', { owned: { theme_void: true } });
+    repo.setUser('u1');
+    await settle();
+    server.offline = true;
+    repo.equip({ theme: 'theme_void' });
+    await settle(60_000);
+    expect(server.doc('u1').equipped).toEqual({});
+    server.offline = false;
+    await settle(5 * 60_000);
+    expect(server.doc('u1').equipped).toEqual({ theme: 'theme_void' });
+    expect(repo.load().equipped).toEqual({ theme: 'theme_void' });
+  });
+
+  it('rename is a profile write with only the name', async () => {
+    const { repo, server } = setup();
+    repo.setUser('u1');
+    await settle();
+    const seen: number[] = [];
+    repo.subscribe(() => seen.push(1));
+    repo.rename('Ás do Laser');
+    expect(repo.name).toBe('Ás do Laser');
+    expect(seen.length).toBe(1);
+    await settle();
+    expect(server.writes.at(-1)).toMatchObject({ kind: 'profile', fields: ['name'] });
+    expect(server.doc('u1').name).toBe('Ás do Laser');
+  });
+
+  it('ignores invalid nicknames', async () => {
+    const { repo, server } = setup();
+    repo.setUser('u1');
+    await settle();
+    repo.rename('no');
+    await settle();
+    expect(server.kinds()).toEqual(['create']);
+  });
+});
+
+describe('FirestoreInventoryRepository — accounts and queue', () => {
+  it('switching accounts loads the other document and keeps each cache apart', async () => {
+    const { repo, server } = setup();
+    server.seed('anon', { coins: 30 });
+    server.seed('google', { coins: 900, owned: { cannon_twin: true }, name: 'Bia' });
+    repo.setUser('anon');
+    await settle();
+    expect(repo.load().coins).toBe(30);
+    const seen: Inventory[] = [];
+    repo.subscribe((inventory) => seen.push(inventory));
+    repo.setUser('google');
+    await settle();
+    expect(repo.load()).toMatchObject({ coins: 900, owned: { cannon_twin: true } });
+    expect(repo.name).toBe('Bia');
+    expect(seen.at(-1)?.coins).toBe(900);
+  });
+
+  it('sends one write at a time, each of a single kind', async () => {
+    const { repo, server } = setup();
+    server.seed('u1', { coins: 5000, owned: { theme_void: true } });
+    repo.setUser('u1');
+    repo.reward(120);
+    repo.equip({ theme: 'theme_void' });
+    repo.rename('Ana');
+    const bought = repo.purchase('cannon_twin', 900);
+    await settle(2 * 60_000);
+    expect((await bought).ok).toBe(true);
+    expect(server.maxActive).toBe(1);
+    expect(server.kinds().sort()).toEqual(['equip', 'profile', 'purchase', 'reward']);
+    expect(server.doc('u1')).toMatchObject({ coins: 5000 - 900 + 120, name: 'Ana', equipped: { theme: 'theme_void' } });
+  });
+});

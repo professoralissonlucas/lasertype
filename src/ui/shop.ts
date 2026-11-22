@@ -180,7 +180,11 @@ export class ShopScreen {
     this.root.hidden = !visible;
     if (visible) {
       window.addEventListener('keydown', this.onKeyDown);
-      this.unsubscribe = this.o.economy.subscribe(() => this.refresh());
+      this.unsubscribe = this.o.economy.subscribe((_, change) => {
+        this.refresh();
+        // The cloud version arrived (or another account): the preview shows its cosmetics.
+        if (change.type === 'sync') this.updatePreview();
+      });
       this.tickTimer = window.setInterval(this.tick, TICK_MS);
       this.syncDay();
       this.ensureSelection();
@@ -194,7 +198,7 @@ export class ShopScreen {
       if (this.tickTimer !== null) window.clearInterval(this.tickTimer);
       this.tickTimer = null;
       this.clearPending();
-      this.statusLine.textContent = '';
+      this.setStatus('');
       this.preview.stop();
     }
   }
@@ -242,7 +246,7 @@ export class ShopScreen {
   private select(itemId: string): void {
     if (itemId !== this.selectedId) {
       this.clearPending();
-      this.statusLine.textContent = '';
+      this.setStatus('');
     }
     this.selectedId = itemId;
     this.refresh();
@@ -255,11 +259,11 @@ export class ShopScreen {
     if (item) this.preview.setCosmetics(withItem(this.o.equipped(), item));
   }
 
-  /** Rebuilds the offer cards when the game day turned (or on first show). */
-  private syncDay(): void {
-    const shop = this.o.economy.today();
-    if (shop.day === this.renderedDay) return;
-    const changed = !Number.isNaN(this.renderedDay);
+  /** Rebuilds the offer cards when the game day turned (or on first show, or when forced). */
+  private syncDay(force = false): void {
+    const shop = force ? this.o.economy.reloadShop() : this.o.economy.today();
+    if (shop.day === this.renderedDay && !force) return;
+    const changed = !Number.isNaN(this.renderedDay) && shop.day !== this.renderedDay;
     this.renderedDay = shop.day;
     this.offerCards = [];
     for (const offer of shop.offers) {
@@ -268,11 +272,16 @@ export class ShopScreen {
       this.offerCards.push(this.buildCard(item, false));
     }
     this.offersGrid.replaceChildren(...this.offerCards.map((card) => card.root));
-    if (changed) {
+    if (changed || force) {
       this.ensureSelection();
       this.refresh();
-      this.statusLine.textContent = this.o.t('shopChanged');
     }
+    if (changed) this.setStatus(this.o.t('shopChanged'));
+  }
+
+  private setStatus(text: string, warn = false): void {
+    this.statusLine.textContent = text;
+    this.statusLine.classList.toggle('shop__status--warn', warn && text !== '');
   }
 
   private readonly tick = (): void => {
@@ -285,14 +294,14 @@ export class ShopScreen {
   private act(): void {
     const { economy, t, sound } = this.o;
     const item = getItem(this.selectedId);
-    if (!item) return;
+    if (!item || economy.purchasing) return;
     const action = itemAction(item.id, economy.inventory, economy.today());
     const name = item.name[this.o.language];
 
     if (action.kind === 'equip') {
       if (economy.equip(item.id).ok) {
         sound.play('equip');
-        this.statusLine.textContent = t('shopEquippedNow', { item: name });
+        this.setStatus(t('shopEquippedNow', { item: name }));
         this.updatePreview();
       }
       return;
@@ -306,27 +315,60 @@ export class ShopScreen {
         this.clearPending();
         this.refresh();
       }, CONFIRM_MS);
-      this.statusLine.textContent = t('shopConfirmHint');
+      this.setStatus(t('shopConfirmHint'));
       this.refresh();
       return;
     }
 
+    // Second click: the purchase goes to the server (a transaction) and comes back.
     this.clearPending();
-    const result = economy.buy(item.id);
-    if (result.ok) {
-      sound.play('purchase');
-      this.statusLine.textContent = t('shopBought', { item: name });
-    } else {
-      this.onPurchaseError(result.error);
-    }
+    this.setStatus(t('shopBuying'));
+    const purchase = economy.buy(item.id, this.renderedDay);
     this.refresh();
+    void purchase.then((result) => {
+      if (result.ok) {
+        sound.play('purchase');
+        this.setStatus(t('shopBought', { item: name }));
+      } else {
+        this.onPurchaseError(result.error);
+      }
+      this.refresh();
+    });
   }
 
+  /** Nothing was charged in any of these cases; the player is told why. */
   private onPurchaseError(error: PurchaseError): void {
-    if (error === 'notForSale') {
-      // The day turned while the screen was open.
-      this.syncDay();
-      this.statusLine.textContent = this.o.t('shopChanged');
+    const { t } = this.o;
+    switch (error) {
+      case 'notForSale':
+        // The day turned while the screen was open.
+        this.syncDay(true);
+        this.setStatus(t('shopChanged'), true);
+        break;
+      case 'dayChanged':
+        this.syncDay(true);
+        this.setStatus(t('shopDayChanged'), true);
+        break;
+      case 'refused':
+        this.syncDay(true);
+        this.setStatus(t('shopRefused'), true);
+        break;
+      case 'offline':
+        this.setStatus(t('shopOffline'), true);
+        break;
+      case 'syncing':
+        this.setStatus(t('shopSyncing'), true);
+        break;
+      case 'owned':
+        this.setStatus(t('shopOwnedElsewhere'), true);
+        break;
+      case 'insufficient':
+        this.setStatus(t('shopInsufficientServer'), true);
+        break;
+      case 'busy':
+      case 'unknown':
+        this.setStatus('');
+        break;
     }
     this.o.sound.play('miss');
   }
@@ -430,6 +472,12 @@ export class ShopScreen {
         button.disabled = false;
         break;
       case 'buy': {
+        if (economy.purchasing) {
+          // Waiting for the server: no second purchase meanwhile.
+          this.actionLabel.textContent = t('shopBuying');
+          button.disabled = true;
+          break;
+        }
         const price = formatNumber(action.offer.price);
         const confirming = this.pendingBuy === item.id;
         this.actionLabel.textContent = t(confirming ? 'shopConfirm' : 'shopBuy', { price });

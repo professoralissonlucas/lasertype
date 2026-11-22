@@ -1,8 +1,8 @@
 // Ownership, coins and equipment (pure). Every operation returns a new inventory;
-// persistence lives in repository.ts and the stateful glue in Economy.ts.
+// persistence lives in repository.ts / firestoreRepository.ts and the glue in Economy.ts.
 import { DEFAULT_ITEM_IDS, getItem, isDefaultItem, isPurchasable } from '../cosmetics/catalog.ts';
 import { COSMETIC_TYPES, type CosmeticType } from '../cosmetics/types.ts';
-import type { DailyShop, EquipError, Inventory, PurchaseError, Result } from './types.ts';
+import type { DailyShop, Equipped, EquipError, Inventory, PurchaseError, Result, ShopOffer } from './types.ts';
 
 export function emptyInventory(): Inventory {
   return { coins: 0, owned: {}, equipped: {}, lastPurchase: null };
@@ -31,22 +31,54 @@ export function grantCoins(inventory: Inventory, amount: number): Inventory {
   return { ...inventory, coins: inventory.coins + coins };
 }
 
-/** Buys an item from today's shop at today's price. */
-export function purchase(inventory: Inventory, shop: DailyShop, itemId: string): Result<PurchaseError> {
+export type PurchaseCheck = { readonly ok: true; readonly offer: ShopOffer } | { readonly ok: false; readonly error: PurchaseError };
+
+/** Can `itemId` be bought from today's shop? Returns today's offer (and price) when it can. */
+export function checkPurchase(inventory: Inventory, shop: DailyShop, itemId: string): PurchaseCheck {
   if (!getItem(itemId)) return { ok: false, error: 'unknown' };
   const offer = shop.offers.find((entry) => entry.itemId === itemId);
   if (!offer) return { ok: false, error: 'notForSale' };
   if (isOwned(inventory, itemId)) return { ok: false, error: 'owned' };
   if (inventory.coins < offer.price) return { ok: false, error: 'insufficient' };
+  return { ok: true, offer };
+}
+
+/** The inventory after paying `price` for `itemId` (what the purchase write sends). */
+export function applyPurchase(inventory: Inventory, itemId: string, price: number): Inventory {
   return {
-    ok: true,
-    inventory: {
-      ...inventory,
-      coins: inventory.coins - offer.price,
-      owned: { ...inventory.owned, [itemId]: true },
-      lastPurchase: itemId,
-    },
+    ...inventory,
+    coins: inventory.coins - price,
+    owned: { ...inventory.owned, [itemId]: true },
+    lastPurchase: itemId,
   };
+}
+
+/** Buys an item from today's shop at today's price. */
+export function purchase(inventory: Inventory, shop: DailyShop, itemId: string): Result<PurchaseError> {
+  const check = checkPurchase(inventory, shop, itemId);
+  if (!check.ok) return check;
+  return { ok: true, inventory: applyPurchase(inventory, itemId, check.offer.price) };
+}
+
+/** Same keys with the same (primitive) values. */
+function sameMap(x: Readonly<Record<string, unknown>>, y: Readonly<Record<string, unknown>>): boolean {
+  const keys = Object.keys(x);
+  return keys.length === Object.keys(y).length && keys.every((key) => x[key] === y[key]);
+}
+
+/** Same item in every category. */
+export function sameEquipped(a: Equipped, b: Equipped): boolean {
+  return sameMap(a, b);
+}
+
+/** Same coins, items, equipment and last purchase. */
+export function sameInventory(a: Inventory, b: Inventory): boolean {
+  return (
+    a.coins === b.coins &&
+    a.lastPurchase === b.lastPurchase &&
+    sameMap(a.owned, b.owned) &&
+    sameEquipped(a.equipped, b.equipped)
+  );
 }
 
 export function equip(inventory: Inventory, itemId: string): Result<EquipError> {

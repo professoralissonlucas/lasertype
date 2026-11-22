@@ -296,8 +296,8 @@ export const CATALOG: readonly CosmeticItem[] = [
  * Every purchasable item, in a fixed order: the daily discount is
  * DISCOUNT_ORDER[dayIndex % DISCOUNT_ORDER.length] (no rng, so Firestore rules can
  * redo the math). Categories alternate so consecutive days discount different things.
- * Changing this list changes which item is discounted on every future day: update the
- * copy in firestore.rules together with it.
+ * Changing this list changes which item is discounted on every future day: run
+ * `npm run seed:shop` with it (the rules read the copy in shop/_config.discountOrder).
  */
 export const DISCOUNT_ORDER: readonly string[] = [
   'cannon_twin',

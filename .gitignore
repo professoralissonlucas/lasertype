@@ -5,3 +5,8 @@ dist
 *.log
 coverage
 .DS_Store
+
+# Firebase Admin service account keys (scripts/seed-shop.ts): never commit them
+*service-account*.json
+*-admin.json
+*firebase-adminsdk*.json

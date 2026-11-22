@@ -1,5 +1,5 @@
 // Balancing constants. Every gameplay number lives here, never inline.
-import type { EconomyConfig } from './economy/types.ts';
+import type { EconomyConfig, SyncConfig } from './economy/types.ts';
 import type { RankingConfig } from './firebase/types.ts';
 import type {
   ComboConfig,
@@ -108,7 +108,8 @@ const GRADING: GradingConfig = {
 
 /**
  * Coins per match: min(floor(points / 100), 80) + grade bonus, × the mode factor (Zen 25%).
- * Prices by rarity; the daily shop has 4 items, one of them 30% off.
+ * Prices by rarity; the daily shop has 4 items, one of them 30% off (economy/shop.ts:
+ * Math.floor(price * 7 / 100) * 10, the integer math of firestore.rules).
  */
 const ECONOMY: EconomyConfig = {
   pointsPerCoin: 100,
@@ -117,9 +118,21 @@ const ECONOMY: EconomyConfig = {
   modeFactor: { survival: 1, timeAttack: 1, zen: 0.25 },
   rarityPrice: { common: 300, rare: 900, epic: 2500, legendary: 6000 },
   shopSize: 4,
-  // Discount in integer math, exactly as firestore.rules: floor(price × 7 / 100) × 10.
-  discountKeepTenths: 7,
-  discountStep: 10,
+};
+
+/**
+ * Cloud sync of users/{uid}. The first two numbers are reward limits of firestore.rules (the
+ * contract; firebase/rules.test.ts fails if they drift apart): one reward write adds at most
+ * 150 coins and needs 30 s since the previous one. Coins beyond that wait as pending.
+ */
+const SYNC: SyncConfig = {
+  maxRewardPerWrite: 150,
+  rewardIntervalSeconds: 30,
+  /** Extra wait on top of the interval (client and server clocks differ a little). */
+  rewardMarginMs: 2000,
+  /** Retry after a failed sync: base × 2^(failures − 1), capped. */
+  retryBaseMs: 5000,
+  retryMaxMs: 120_000,
 };
 
 /**
@@ -156,5 +169,6 @@ export const CONFIG = {
   difficulty: DIFFICULTY,
   grading: GRADING,
   economy: ECONOMY,
+  sync: SYNC,
   ranking: RANKING,
 } as const;

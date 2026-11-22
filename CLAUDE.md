@@ -27,10 +27,11 @@
 | HUD / menus / loja | HTML + CSS sobre o canvas (sem framework de UI) |
 | Áudio | Web Audio API — efeitos sonoros **sintetizados proceduralmente em runtime** (osciladores + ruído filtrado), sem arquivos de áudio |
 | Backend | Firebase: Auth (anônimo + Google) e Firestore (SDK *lite*), carregados sob demanda só quando há config |
+| Admin | `firebase-admin` (devDependency) só em `scripts/seed-shop.ts`, rodado com o TypeScript nativo do Node (sem build) |
 | Deploy | GitHub Actions → GitHub Pages |
 | Testes | Vitest para lógica pura (pontuação, economia, mira, spawn) |
 
-**Não adicionar dependências novas sem perguntar.** Permitidas por padrão: `vite`, `typescript`, `vitest`, `firebase`.
+**Não adicionar dependências novas sem perguntar.** Permitidas por padrão: `vite`, `typescript`, `vitest`, `firebase`, `firebase-admin` (só em `scripts/`).
 
 ---
 
@@ -42,7 +43,8 @@ npm run dev        # servidor local
 npm run build      # build de produção em dist/
 npm run preview    # testar o build
 npm run test       # vitest
-npm run typecheck  # tsc --noEmit
+npm run typecheck  # tsc --noEmit (app) + tsc --noEmit -p scripts (scripts Node)
+npm run seed:shop  # grava shop/{id} e shop/_config no Firestore (ver §9 "Loja no Firestore"); -- --dry-run só mostra
 ```
 
 Antes de dar uma tarefa como concluída: `npm run typecheck && npm run test && npm run build` devem passar.
@@ -73,22 +75,24 @@ src/
     types.ts              # categorias, raridades, params tipados por categoria
     catalog.ts            # catálogo de itens (dados puros) + DISCOUNT_ORDER
     equip.ts              # resolve o que está equipado (com fallback para o padrão)
-  economy/                # lógica pura, sem DOM/storage (pronta para sync)
-    types.ts              # Inventory (espelha users/{uid}), ofertas, EconomyChange
-    rewards.ts            # moedas por partida (missões, streak: Fase 5.5)
+  economy/                # lógica pura (sem DOM) + os repositórios (onde o inventário mora)
+    types.ts              # Inventory (espelha users/{uid}), ofertas, erros de compra, EconomyChange, SyncConfig
+    rewards.ts            # moedas por partida (missões, streak, XP: só os campos por enquanto)
     shop.ts               # loja rotativa (dia de jogo, DISCOUNT_ORDER, seed = data)
-    inventory.ts          # posse/equipamento/compra (puro)
-    repository.ts         # onde o inventário mora (localStorage; Firestore na 5.5)
+    inventory.ts          # posse/equipamento/compra (puro: checkPurchase, applyPurchase, parseInventory)
+    repository.ts         # interface InventoryRepository (uma operação por tipo de escrita) + versão localStorage (builds offline)
+    firestoreRepository.ts # FirestoreInventoryRepository: users/{uid} + cache local, moedas pendentes, fila de escritas
     Economy.ts            # estado + repositório + listeners (a UI só fala com ele)
   firebase/
     app.ts                # config VITE_FIREBASE_* + carregamento sob demanda do SDK (null = offline)
     types.ts              # estado da conta, Board, ScoreFields, RankingConfig
     auth.ts               # AuthService: anônimo automático, vínculo Google por popup (backend atrás de interface)
     leaderboard.ts        # scores: id, documento, validação espelhando as regras, recorde, top 50
+    profile.ts            # users/{uid}: campos de cada tipo de escrita (puros), leitura tolerante, UserBackend (transações)
+    shopDocs.ts           # documentos da coleção shop (o que o seed grava), validados contra o catálogo
     rules.test.ts         # garante que firestore.rules e o cliente não divergem
-    profile.ts            # users/{uid} (Fase 5.5)
   profile/
-    nickname.ts           # apelido do ranking (validação, sugestão, localStorage por uid)
+    nickname.ts           # apelido do ranking (validação, padrão "Piloto" + 4 dígitos)
   ui/                     # app.ts (troca de telas) + telas: menu, hud, combatLog, pause, report, settings, shop
                           # (+ shopPreview, shopModel, previewScript), ranking, account (selo), nicknameDialog, toast
   audio/                  # receitas de som (dados), planejamento puro e AudioEngine (Web Audio)
@@ -97,7 +101,8 @@ src/
 public/
   music/  fonts/          # sem sfx/: efeitos sonoros são sintetizados em runtime
 scripts/
-  seed-shop.ts            # envia preços do catalog.ts para a coleção shop
+  seed-shop.ts            # firebase-admin: grava shop/{id} e shop/_config a partir do catalog.ts
+  tsconfig.json           # tipos do Node para os scripts (o app não vê os globais do Node)
 firestore.rules           # CONTRATO do backend (ver §9)
 .github/workflows/deploy.yml
 ```
@@ -204,7 +209,8 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
 
 ### Ganho de moedas
 - Partida: `floor((min(floor(pontos / 100), 80) + bônus de nota) × fator do modo)`; bônus S +20, A +10, B +5, C/D 0; fator 1 (Survival, Time Attack) ou 0,25 (Zen). Máximo 100 por partida. Creditado uma vez, ao abrir o Mission Report (que mostra o detalhe e o saldo). Números em `CONFIG.economy`, lógica em `economy/rewards.ts`.
-- Missões diárias (3 por dia, geradas pela data), streak de login, nível por XP, bônus do Desafio Diário.
+- Online, as moedas aparecem na hora e ficam **pendentes** até o servidor aceitar: cada escrita de recompensa leva no máximo 150 e espera 30 s desde a anterior (limites das regras, em `CONFIG.sync`); o resto vai nas escritas seguintes, sem perder nada (ver §9 "Sync de users/{uid}").
+- Missões diárias (3 por dia, geradas pela data), streak de login, nível por XP, bônus do Desafio Diário. **Por enquanto só os campos existem** em `users/{uid}` (`xp`, `level`, `streak`, `lastLogin`, `stats`, criados com valores iniciais e nunca atualizados); a lógica fica para depois.
 
 ### Dia de jogo (`utils/day.ts`)
 - Um único calendário para a loja e o Desafio Diário: o dia vira às **03:00 UTC** (meia-noite de Brasília) para todos.
@@ -243,16 +249,20 @@ interface CosmeticItem<T extends CosmeticType> {
 ### Loja rotativa (`economy/shop.ts`)
 - 4 itens por dia de jogo, iguais para todos; o item com desconto vem primeiro.
 - **Item com desconto, sem rng** (para as regras do Firestore refazerem a conta):
-  `discountedId = DISCOUNT_ORDER[dayIndex % DISCOUNT_ORDER.length]`, preço em aritmética inteira, exatamente como nas regras: `Math.floor(price * 7 / 100) * 10` (300→210, 900→630, 2.500→1.750, 6.000→4.200).
-  `DISCOUNT_ORDER` (em `cosmetics/catalog.ts`) lista todos os itens compráveis em ordem fixa, alternando categorias. As regras leem a mesma lista em `shop/_config.discountOrder` (gravada por `scripts/seed-shop.ts`, Fase 5.5). Mudar a lista muda o desconto de todos os dias futuros: regravar `shop/_config` junto.
+  `discountedId = DISCOUNT_ORDER[dayIndex % DISCOUNT_ORDER.length]`, preço em aritmética inteira, exatamente como nas regras: `Math.floor(price * 7 / 100) * 10` (300→210, 900→630, 2.500→1.750, 6.000→4.200). Essa expressão fica **literal** em `discountedPrice` (é contrato, não balanceamento); `rules.test.ts` compara o texto com o das regras (`int(math.floor(base * 7 / 100)) * 10`).
+  `DISCOUNT_ORDER` (em `cosmetics/catalog.ts`) lista todos os itens compráveis em ordem fixa, alternando categorias. As regras leem a mesma lista em `shop/_config.discountOrder` (gravada por `npm run seed:shop`). Mudar a lista (ou um preço) muda o desconto de todos os dias futuros: rodar o seed junto, senão as compras são recusadas.
 - **Os outros 3** são sorteados com seed `shop:YYYY-MM-DD` (`dayKey`), excluindo o item com desconto e preferindo categorias que ainda não estão na loja.
-- Compra só de itens da loja do dia, pelo preço do dia; em dois cliques (Comprar → Confirmar). Comprar não equipa.
+- Compra só de itens da loja do dia, pelo preço do dia; em dois cliques (Comprar → Confirmar → "Comprando…"). Comprar não equipa. Uma compra por vez.
+- Online a compra é uma **transação** no Firestore e só vale quando o servidor aceita (nada é cobrado antes). Se a loja que o jogador via é de outro dia, nada é enviado; se o servidor recusa (ex.: o dia virou no caminho e o preço mudou), a loja é **recarregada** e o jogador é avisado ("A loja virou o dia… Nada foi cobrado"). Outros avisos: sem conexão, moedas ainda sincronizando, item já comprado em outro dispositivo, saldo atualizado pelo servidor.
 - Tela da loja: abas "Loja do dia" e "Inventário" (todas as categorias; equipar o que possui), contagem até a próxima rotação e **prévia ao vivo** do item selecionado (mini canvas com a cena roteirizada de `ui/previewScript.ts`, desenhada com as mesmas funções do jogo, por cima do que está equipado).
 
-### Inventário (offline-first)
-- `Inventory = { coins, owned, equipped, lastPurchase }` (mesmos campos de `users/{uid}`); `owned` guarda só compras (padrões são implícitos); `equipped` sem a categoria = padrão.
-- Salvo no `localStorage` em `lasertype.inventory.v1`; leitura tolerante (`parseInventory`): moedas inválidas → 0, ids desconhecidos descartados, equipado precisa existir, ser da categoria e estar possuído.
-- `Economy` emite mudanças tipadas (`reward`, `purchase`, `equip`): o sync da Fase 5.5 transforma cada uma em uma escrita validada pelas regras.
+### Inventário
+- `Inventory = { coins, owned, equipped, lastPurchase }` (mesmos campos de `users/{uid}`); `owned` guarda só compras (padrões são implícitos, nunca entram em `owned`); `equipped` sem a categoria = padrão.
+- Leitura tolerante (`parseInventory`): moedas inválidas → 0, ids desconhecidos descartados, equipado precisa existir, ser da categoria e estar possuído.
+- `InventoryRepository` (`economy/repository.ts`) tem **uma operação por tipo de escrita** (`reward`, `purchase`, `equip`, mais `load` e `subscribe`), porque as regras aceitam um só tipo de mudança por escrita; salvar o inventário inteiro não caberia nelas. Duas implementações:
+  - **Build offline** (sem `VITE_FIREBASE_*`): `localInventoryRepository`, tudo no `localStorage` em `lasertype.inventory.v1`.
+  - **Build online**: `FirestoreInventoryRepository` — a verdade é `users/{uid}`; o `localStorage` é só cache (§9). O progresso antigo de `lasertype.inventory.v1` (testes das fases offline) é ignorado, não migrado.
+- `Economy` emite mudanças tipadas (`reward`, `purchase`, `equip` e `sync` = versão do servidor chegou: carga, outro dispositivo, troca de conta).
 
 ---
 
@@ -261,19 +271,22 @@ interface CosmeticItem<T extends CosmeticType> {
 ### `firestore.rules` é o contrato
 - O arquivo na raiz é a fonte da verdade do backend: **o cliente se adapta a ele, exatamente**. Mudar qualquer regra = perguntar antes.
 - Só podem ser ajustados (avisando) as listas de identificadores (`mode`/`diff`/`lang`) para bater com os nomes do código e `maxPointsPerSecond`, calculado pelo máximo teórico de `scoring.ts`.
-- `firebase/rules.test.ts` lê o arquivo e falha se divergir do cliente: listas, limites (WPM, duração, nome, precisão), `maxPointsPerSecond`, campos e id do documento, dia de jogo (03:00 UTC) e fórmula do desconto.
+- `firebase/rules.test.ts` lê o arquivo e falha se divergir do cliente: listas, limites (WPM, duração, nome, precisão), `maxPointsPerSecond`, campos e id do documento, dia de jogo (03:00 UTC), fórmula do desconto, campos de cada escrita em `users/{uid}` (criação, recompensa, compra, equipar, perfil), limites da recompensa (150 / 30 s = `CONFIG.sync`) e os campos da coleção `shop` que o seed grava.
 - Publicar: Console → Firestore Database → Regras → colar o arquivo → Publicar (o deploy não publica regras).
 
 ### Autenticação (`firebase/auth.ts`)
 - Sem `VITE_FIREBASE_*` o SDK nem é baixado: o jogo funciona offline, sem conta nem ranking, sem erros.
 - Login **anônimo** automático ao abrir o jogo (em segundo plano; o jogo nunca espera).
 - "Entrar com Google" (menu, ranking e Mission Report) → `linkWithPopup(GoogleAuthProvider)` chamado **direto no clique** (sem redirect), depois `getIdToken(true)` para o token trazer a identidade `google.com` que as regras exigem.
-- `auth/credential-already-in-use`: entra na conta Google existente com `GoogleAuthProvider.credentialFromError` + `signInWithCredential`, mantém o progresso dela e avisa: "Você entrou na sua conta Google existente. O progresso desta sessão anônima não foi transferido." (Na Fase 5 não há progresso na nuvem; moedas e inventário locais ficam como estão até a 5.5.)
+- `auth/credential-already-in-use`: entra na conta Google existente com `GoogleAuthProvider.credentialFromError` + `signInWithCredential`, mantém o progresso dela e avisa: "Você entrou na sua conta Google existente. O progresso desta sessão anônima não foi transferido." Moedas e itens passam a ser os do `users/{uid}` da conta Google; os da sessão anônima ficam no documento (e no cache) dela.
+- Vincular pela primeira vez (`linkWithPopup`) mantém o **mesmo uid**: o `users/{uid}` da sessão anônima continua sendo o da conta, então não há progresso a transferir.
 - Popup fechado = cancelamento silencioso; popup bloqueado e outros erros = aviso.
 
 ### Apelido (privacidade)
-- **Nunca usar o nome real nem a foto do Google** (alunos podem jogar). No primeiro vínculo o jogador escolhe um apelido de 3 a 12 caracteres (letras, números, `_` e espaço), sugerido como `"Piloto" + 4 caracteres do uid`; editável depois pelo selo de conta. Cancelar mantém a sugestão.
-- Guardado no `localStorage` (`lasertype.nicknames.v1`, por uid: computadores compartilhados). Na 5.5 vai para `users/{uid}.name`. Trocar o apelido não altera recordes já enviados (as regras só aceitam atualizar com score maior).
+- **Nunca usar o nome real nem a foto do Google** (alunos podem jogar); `photo` nunca é enviado.
+- Mora em `users/{uid}.name`. Toda conta (anônima também) nasce com `"Piloto" + 4 dígitos` (`defaultNickname`: dígitos derivados do uid por hash, iguais em qualquer dispositivo).
+- No primeiro vínculo com o Google o jogador escolhe um apelido de 3 a 12 caracteres (letras, números, `_` e espaço), sugerido com o nome atual; cancelar mantém o atual. Ao entrar numa conta Google já existente não pergunta (ela já tem nome). Editável depois pelo selo de conta.
+- Salvar = escrita de **perfil** (só `name`), aplicada na hora e enviada em segundo plano. O antigo `lasertype.nicknames.v1` não é mais lido. Trocar o apelido não altera recordes já enviados (as regras só aceitam atualizar com score maior).
 
 ### Ranking (`firebase/leaderboard.ts`, `ui/ranking.ts`)
 - Só contas Google enviam; Zen nunca envia. Um documento por jogador/quadro: id `${uid}_${mode}_${diff}_${lang}_${day}` (`day = dayIndex()` no modo daily, 0 nos outros).
@@ -285,13 +298,13 @@ interface CosmeticItem<T extends CosmeticType> {
 
 ### Coleções
 ```
-users/{uid}
-  name, photo, coins, xp, level, streak, lastLogin
-  owned:    { [itemId]: true }
-  equipped: { [type]: itemId }
-  lastReward: timestamp
-  lastPurchase: itemId
-  stats: { games, bestScore, bestWpm, ... }
+users/{uid}     # criado na primeira sessão (firebase/profile.ts → newUserFields)
+  name ("Piloto" + 4 dígitos), coins 0, xp 0, level 1, streak 0, lastLogin null   # photo nunca é gravado
+  owned:    { [itemId]: true }        # começa {}; itens padrão não entram
+  equipped: { [type]: itemId }        # começa {}
+  lastReward: timestamp               # serverTimestamp() na criação e em cada recompensa
+  lastPurchase: itemId | null
+  stats: { games: 0, bestScore: 0, bestWpm: 0 }   # só o campo, sem lógica ainda
 
 shop/{itemId}   → { price, rarity, type }      # somente leitura para clientes
 shop/_config    → { discountOrder: [itemId, ...] }  # mesma ordem de DISCOUNT_ORDER
@@ -311,9 +324,24 @@ scores/{uid}_{mode}_{diff}_{lang}_{day}
 - As chaves de config do Firebase podem ficar no front-end; a segurança está nas regras.
 - **Não implementar venda de moedas por dinheiro real** (exigiria validação em servidor / Cloud Functions).
 
-### Offline-first
-- Progresso salvo em `localStorage` primeiro; sincroniza com Firestore quando logado.
-- Ao vincular conta pela primeira vez, enviar o progresso local.
+### Sync de `users/{uid}` (`economy/firestoreRepository.ts`)
+- **Uma escrita = um tipo, só com os campos dele** (construtores puros em `firebase/profile.ts`, conferidos por `rules.test.ts`):
+  - criação: transação que lê e, se não existe, grava `newUserFields` (moedas 0, xp 0, `owned` {}, `lastReward = serverTimestamp()`);
+  - recompensa: transação com `coins` (saldo do servidor + até 150) e `lastReward = serverTimestamp()`;
+  - compra: transação que lê o saldo/itens do servidor e grava `coins` (− preço exato), `owned.<id>` (caminho de campo: o resto do mapa fica intacto) e `lastPurchase`;
+  - equipar: `updateDoc` só com `equipped`; perfil: `updateDoc` só com `name`.
+- Todas as escritas passam por **uma fila** (uma por vez), sempre para o uid conectado.
+- **Cache** no `localStorage` em `lasertype.cloud.v1`, por uid (`{ last, users: { [uid]: { inventory, pending, equipDirty, name, nameDirty, nextRewardAt } } }`): mostra moedas e cosméticos na hora (inclusive sem rede) com o último uid enquanto o Auth responde. Leitura tolerante.
+- Ao abrir: o documento do servidor vence, exceto o que ainda não foi enviado (moedas pendentes, equipar/apelido "sujos"), que é reenviado em seguida.
+- **Moedas pendentes:** saldo mostrado = confirmado + pendente. Escrita de recompensa com `min(pendente, 150)`, no mínimo 30 s (+2 s de margem, relógio local) depois da anterior ou da criação; recusada ou sem rede → continua pendente e tenta de novo com espera crescente. Moedas ganhas antes de qualquer conta responder (primeira visita sem rede) vão para a primeira conta que responder.
+- Equipar e apelido aparecem na hora e são reenviados quando a conexão volta. Sem rede, a compra responde "sem conexão" (compras precisam do servidor).
+- `App` chama `setUser(uid)` a cada mudança de conta (`null` = conectando/sem rede: mantém o cache). Configurações continuam só locais (não há campos para elas nas regras).
+
+### Loja no Firestore (`scripts/seed-shop.ts`)
+- As regras precisam de `shop/{id} = { price, rarity, type }` (só itens compráveis) e `shop/_config = { discountOrder }`. Sem eles toda compra é recusada.
+- Gerados por `firebase/shopDocs.ts` (puro, valida que `DISCOUNT_ORDER` lista cada comprável uma vez) e gravados com `firebase-admin` num batch. Lista documentos antigos que saíram do catálogo (apagar à mão no console).
+- Chave: Console → Configurações do projeto → Contas de serviço → Gerar nova chave privada. Guardar **fora do repositório**; `.gitignore` cobre `*service-account*.json`, `*-admin.json` e `*firebase-adminsdk*.json`.
+- Rodar (Windows/PowerShell): `$env:GOOGLE_APPLICATION_CREDENTIALS = "C:\caminho\chave.json"; npm run seed:shop` (bash: `GOOGLE_APPLICATION_CREDENTIALS=... npm run seed:shop`). `npm run seed:shop -- --dry-run` mostra o que seria gravado sem credencial. Requer Node ≥ 22.18 (TypeScript nativo).
 
 ---
 
@@ -363,7 +391,7 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Catálogo com 20 itens (5 categorias × 4, ver §8) e `params` tipados por categoria. Os padrões reproduzem exatamente o visual anterior.
   - Renderers parametrizados: o desenho saiu do `Renderer` para `drawCannon`/`drawWord`/`drawFx`/`drawBackground`, que recebem um `Skin` (cosméticos resolvidos + sprites de brilho e nebulosa em cache). Partículas usam slots de cor (`laser`, `blast`, `blastAlt`) resolvidos pelo `Skin`; explosões parametrizadas nos emissores (letras `scatter`/`dissolve`/`collapse`, detritos riscos ou pixels, implosão, anéis). Canhão duplo alterna o cano a cada tiro.
   - Loja rotativa com o dia de jogo (03:00 UTC) e desconto determinístico por `DISCOUNT_ORDER` (§8); inventário e equipar; prévia ao vivo num mini canvas (pausa fora da tela da loja, respeita "Reduzir efeitos").
-  - `economy/` isolada: lógica pura + `InventoryRepository` (localStorage) + `Economy` com mudanças tipadas para o sync da 5.5.
+  - `economy/` isolada: lógica pura + `InventoryRepository` (localStorage) + `Economy` com mudanças tipadas (o sync veio na 5.5).
   - Sons procedurais novos: compra e equipar. `__lasertype.economy` no gancho de desenvolvimento.
 - [x] **Fase 5 — Firebase:** Auth anônimo, envio de score, ranking, regras.
   - `firestore.rules` copiado do contrato com os dois ajustes autorizados: `diff` `'medium'` → `'normal'` (nome do código) e `maxPointsPerSecond` 1500 → **1977**.
@@ -372,7 +400,15 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Desconto da loja passou para a aritmética inteira do contrato (`Math.floor(price * 7 / 100) * 10`; mesmos valores).
   - Workflow com os secrets `VITE_FIREBASE_*`. Testado no navegador: login anônimo real e leitura do ranking (falha até o índice composto existir).
   - Pendências no console: publicar `firestore.rules`, criar o índice composto de `scores` (§9) e autorizar o domínio do GitHub Pages no Auth.
-- [ ] **Fase 5.5 — Contas e economia online:** vínculo Google, sync de perfil, regras de moedas/compra, missões, streak.
+- [x] **Fase 5.5 — Contas e economia online:** vínculo Google, sync de perfil, regras de moedas/compra, missões, streak.
+  - `FirestoreInventoryRepository` (§9 "Sync de users/{uid}") com a mesma interface do repositório local, que passou a ter uma operação por tipo de escrita. `localStorage` virou cache (`lasertype.cloud.v1`); o antigo `lasertype.inventory.v1` só vale em builds offline.
+  - `users/{uid}` criado na primeira sessão (anônima também) com moedas 0, xp 0, `owned` {} e `lastReward = serverTimestamp()`; nome inicial `"Piloto" + 4 dígitos`, editável (escrita de perfil). O apelido saiu do `localStorage`.
+  - Cada escrita é de um tipo só, com os campos permitidos: recompensa (transação, ≤ 150, 30 s, excedente pendente sem perder moedas), compra (transação; recusa na virada do dia recarrega a loja e avisa), equipar, perfil.
+  - Desconto literal `Math.floor(price * 7 / 100) * 10` em `shop.ts` (saíram `discountKeepTenths`/`discountStep` do `CONFIG`).
+  - `scripts/seed-shop.ts` (`npm run seed:shop`) com `firebase-admin` (devDependency autorizada) e `GOOGLE_APPLICATION_CREDENTIALS`; `scripts/tsconfig.json` dá os tipos do Node só aos scripts.
+  - Missões, streak e XP: **só os campos** (lógica pendente).
+  - Testado com servidor falso que aplica os limites das regras (`firestoreRepository.test.ts`); não testado contra o Firebase real.
+  - Pendências no console: publicar `firestore.rules` e rodar `npm run seed:shop` (sem `shop/*` toda compra é recusada).
 - [ ] **Fase 6 — Deploy:** GitHub Actions + Pages, App Check.
   - [x] Workflow `.github/workflows/deploy.yml` (antecipado com autorização em 2026-11-21): no push para `main` roda `npm ci`, testes e build (Node 26) e publica `dist/` com `actions/deploy-pages`. Requer Settings → Pages → Source = "GitHub Actions".
   - [x] Secrets `VITE_FIREBASE_*` no passo de build (Fase 5).

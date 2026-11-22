@@ -1,4 +1,4 @@
-// Coins per match (pure). Missions, streak and XP arrive in Phase 5.5.
+// Coins per match (pure). Missions, streak and XP: only their users/{uid} fields exist so far.
 import { CONFIG } from '../config.ts';
 import type { Grade } from '../game/types.ts';
 import type { ModeId } from '../modes/types.ts';

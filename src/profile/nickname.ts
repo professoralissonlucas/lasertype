@@ -1,11 +1,9 @@
-// Ranking nickname. Never the real Google name or photo (students may play): the player
-// picks a nickname when first linking Google, prefilled with "Piloto" + 4 uid characters.
-// Stored locally per uid (shared computers); Phase 5.5 moves it to users/{uid}.name.
+// Ranking nickname. Never the real Google name or photo (students may play). It lives in
+// users/{uid}.name (firebase/profile.ts), created as "Piloto" + 4 digits and editable from
+// the account badge; the first Google link asks for it. This file only holds the rules.
 import { CONFIG } from '../config.ts';
 import type { RankingConfig } from '../firebase/types.ts';
-import { loadJson, saveJson, type KeyValueStore } from '../utils/storage.ts';
-
-export const NICKNAMES_KEY = 'lasertype.nicknames.v1';
+import { hashString } from '../utils/rng.ts';
 
 const ALLOWED = /^[\p{L}\p{N}_ ]+$/u;
 
@@ -30,28 +28,11 @@ export function isValidNickname(name: string, config: RankingConfig = CONFIG.ran
   );
 }
 
-/** "Piloto" + the first 4 letters/digits of the uid (Firebase uids are alphanumeric). */
+/**
+ * "Piloto" + 4 digits derived from the uid (e.g. "Piloto0427"): the same on every device,
+ * so the name is right even before users/{uid} has been read.
+ */
 export function defaultNickname(uid: string): string {
-  return `Piloto${uid.replace(/[^A-Za-z0-9]/g, '').slice(0, 4)}`;
-}
-
-function loadAll(store: KeyValueStore | null): Record<string, string> {
-  const raw = loadJson(store, NICKNAMES_KEY);
-  const out: Record<string, string> = {};
-  if (typeof raw !== 'object' || raw === null) return out;
-  for (const [uid, name] of Object.entries(raw as Record<string, unknown>)) {
-    if (typeof name === 'string' && isValidNickname(name)) out[uid] = name;
-  }
-  return out;
-}
-
-/** The saved nickname of `uid`, or null (never asked yet, or invalid). */
-export function loadNickname(store: KeyValueStore | null, uid: string): string | null {
-  return loadAll(store)[uid] ?? null;
-}
-
-/** Saves a valid nickname for `uid`; false when invalid or the store refused it. */
-export function saveNickname(store: KeyValueStore | null, uid: string, name: string): boolean {
-  if (!isValidNickname(name)) return false;
-  return saveJson(store, NICKNAMES_KEY, { ...loadAll(store), [uid]: name });
+  const digits = String(hashString(`nickname:${uid}`) % 10_000).padStart(4, '0');
+  return `Piloto${digits}`;
 }

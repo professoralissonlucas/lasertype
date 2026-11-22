@@ -12,10 +12,13 @@ import { dayKeyOf } from '../utils/day.ts';
 import { createRng, shuffled } from '../utils/rng.ts';
 import type { DailyShop, EconomyConfig, ShopOffer } from './types.ts';
 
-/** Math.floor(price * 7 / 100) * 10 (e.g. 900 → 630), integer math as in firestore.rules. */
-export function discountedPrice(price: number, config: EconomyConfig = CONFIG.economy): number {
-  const step = config.discountStep;
-  return Math.floor((price * config.discountKeepTenths) / (10 * step)) * step;
+/**
+ * 30% off rounded down to 10 coins (e.g. 900 → 630), in integer math, exactly as
+ * firestore.rules → priceFor: int(math.floor(base * 7 / 100)) * 10. Kept literal on purpose
+ * (it is the contract, not a balancing knob); rules.test.ts compares both texts.
+ */
+export function discountedPrice(price: number): number {
+  return Math.floor(price * 7 / 100) * 10;
 }
 
 /** DISCOUNT_ORDER[day % length] (wrapped so days before 1970 also work). */
@@ -39,12 +42,12 @@ export interface ShopSource {
 
 const DEFAULT_SOURCE: ShopSource = { catalog: CATALOG, discountOrder: DISCOUNT_ORDER, config: CONFIG.economy };
 
-function offerOf(item: CosmeticItem, discounted: boolean, config: EconomyConfig): ShopOffer {
+function offerOf(item: CosmeticItem, discounted: boolean): ShopOffer {
   const basePrice = item.price ?? 0;
   return {
     itemId: item.id,
     basePrice,
-    price: discounted ? discountedPrice(basePrice, config) : basePrice,
+    price: discounted ? discountedPrice(basePrice) : basePrice,
     discounted,
   };
 }
@@ -79,6 +82,6 @@ export function dailyShop(day: number, source: ShopSource = DEFAULT_SOURCE): Dai
   return {
     day,
     key: dayKeyOf(day),
-    offers: [offerOf(deal, true, config), ...picked.map((item) => offerOf(item, false, config))],
+    offers: [offerOf(deal, true), ...picked.map((item) => offerOf(item, false))],
   };
 }

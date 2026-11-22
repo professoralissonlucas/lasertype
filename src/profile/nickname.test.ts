@@ -1,14 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { memoryStore } from '../utils/storage.ts';
-import {
-  defaultNickname,
-  isValidNickname,
-  loadNickname,
-  nicknameLength,
-  NICKNAMES_KEY,
-  normalizeNickname,
-  saveNickname,
-} from './nickname.ts';
+import { defaultNickname, isValidNickname, nicknameLength, normalizeNickname } from './nickname.ts';
 
 describe('nickname rules (3–12: letters, digits, _ and space)', () => {
   it('accepts letters (accented too), digits, underscore and inner spaces', () => {
@@ -35,32 +26,17 @@ describe('nickname rules (3–12: letters, digits, _ and space)', () => {
 });
 
 describe('defaultNickname', () => {
-  it('is "Piloto" + the first 4 characters of the uid, always valid', () => {
-    expect(defaultNickname('aB3xYz789')).toBe('PilotoaB3x');
-    for (const uid of ['Zx', 'q1w2e3r4t5y6u7i8o9p0', '--__']) expect(isValidNickname(defaultNickname(uid)), uid).toBe(true);
-  });
-});
-
-describe('nickname storage (per uid)', () => {
-  it('saves and loads per account', () => {
-    const store = memoryStore();
-    expect(loadNickname(store, 'u1')).toBeNull();
-    expect(saveNickname(store, 'u1', 'Ana')).toBe(true);
-    expect(saveNickname(store, 'u2', 'Bia_2')).toBe(true);
-    expect(loadNickname(store, 'u1')).toBe('Ana');
-    expect(loadNickname(store, 'u2')).toBe('Bia_2');
+  it('is "Piloto" + 4 digits, always valid', () => {
+    for (const uid of ['aB3xYz789', 'Zx', 'q1w2e3r4t5y6u7i8o9p0', '--__', '']) {
+      const name = defaultNickname(uid);
+      expect(name, uid).toMatch(/^Piloto[0-9]{4}$/);
+      expect(isValidNickname(name), uid).toBe(true);
+    }
   });
 
-  it('refuses invalid names and ignores tampered entries', () => {
-    const store = memoryStore({ [NICKNAMES_KEY]: JSON.stringify({ u1: 'x', u2: 42, u3: 'Válido' }) });
-    expect(saveNickname(store, 'u4', 'no')).toBe(false);
-    expect(loadNickname(store, 'u1')).toBeNull();
-    expect(loadNickname(store, 'u2')).toBeNull();
-    expect(loadNickname(store, 'u3')).toBe('Válido');
-  });
-
-  it('works without storage (private mode)', () => {
-    expect(loadNickname(null, 'u1')).toBeNull();
-    expect(saveNickname(null, 'u1', 'Ana')).toBe(false);
+  it('depends only on the uid (same on every device) and varies between uids', () => {
+    expect(defaultNickname('aB3xYz789')).toBe(defaultNickname('aB3xYz789'));
+    const names = new Set(Array.from({ length: 50 }, (_, i) => defaultNickname(`uid-${i}`)));
+    expect(names.size).toBeGreaterThan(40);
   });
 });

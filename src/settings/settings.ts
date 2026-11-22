@@ -1,5 +1,5 @@
 // Player settings (pure model) persisted in localStorage.
-// Offline-first: always read from the local store; cloud sync arrives in Phase 5.5.
+// They stay on this device (users/{uid} has no settings fields in firestore.rules).
 import { CONFIG } from '../config.ts';
 import { GAME_DIFFICULTIES, type GameDifficulty } from '../game/types.ts';
 import { MODE_IDS, type ModeId } from '../modes/types.ts';

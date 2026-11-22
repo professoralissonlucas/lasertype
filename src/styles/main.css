@@ -1277,6 +1277,11 @@ kbd {
   font-size: 12px;
 }
 
+/* A purchase that did not go through (nothing was charged). */
+.shop__status--warn {
+  color: var(--combo);
+}
+
 /* ---------- Mission Report coins ---------- */
 
 .report__coins {

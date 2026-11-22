@@ -19,8 +19,17 @@ describe('discountedPrice', () => {
   it('rounds down to a multiple of 10, in integer math', () => {
     expect(discountedPrice(1234)).toBe(860); // 8638 / 100 → 86 → 860
     expect(discountedPrice(15)).toBe(10);
-    for (let price = 0; price <= 10_000; price += 10) {
-      expect(discountedPrice(price)).toBe(Math.floor((price * 7) / 100) * 10);
+    for (let price = 0; price <= 10_000; price++) {
+      expect(discountedPrice(price)).toBe(Math.floor(price * 7 / 100) * 10);
+    }
+  });
+
+  it('matches the rules’ int(math.floor(base * 7 / 100)) * 10 (integer result, never above 70%)', () => {
+    for (let price = 0; price <= 10_000; price++) {
+      const value = discountedPrice(price);
+      expect(Number.isInteger(value)).toBe(true);
+      expect(value % 10).toBe(0);
+      expect(value * 10).toBeLessThanOrEqual(price * 7);
     }
   });
 });

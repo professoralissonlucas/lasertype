@@ -1,11 +1,13 @@
 // Screen switching: menu ↔ settings ↔ shop ↔ ranking ↔ match (HUD, pause, Mission Report).
 // Owns the persisted settings, the economy and the online account, and applies them
-// (volume, effects, language, equipped cosmetics, ranking submissions).
+// (volume, effects, language, equipped cosmetics, nickname, ranking submissions).
 import type { AudioEngine } from '../audio/AudioEngine.ts';
 import { resolveCosmetics } from '../cosmetics/equip.ts';
 import type { ResolvedCosmetics } from '../cosmetics/types.ts';
 import { Economy } from '../economy/Economy.ts';
-import { localInventoryRepository } from '../economy/repository.ts';
+import type { FirestoreInventoryRepository } from '../economy/firestoreRepository.ts';
+import { sameEquipped } from '../economy/inventory.ts';
+import type { InventoryRepository } from '../economy/repository.ts';
 import type { AuthService, LinkOutcome } from '../firebase/auth.ts';
 import { isRankedMode, type Leaderboard, type MatchResult, type SubmitResult, type Submitter } from '../firebase/leaderboard.ts';
 import type { Board } from '../firebase/types.ts';
@@ -13,7 +15,7 @@ import { Game, type GameView, type MatchConfig } from '../game/Game.ts';
 import { buildReport, type MatchReport } from '../game/report.ts';
 import type { MatchState } from '../game/state.ts';
 import { MODES } from '../modes/index.ts';
-import { defaultNickname, loadNickname, saveNickname } from '../profile/nickname.ts';
+import { defaultNickname } from '../profile/nickname.ts';
 import { saveSettings, type Settings } from '../settings/settings.ts';
 import { createIntegerFormatter } from '../utils/format.ts';
 import type { KeyValueStore } from '../utils/storage.ts';
@@ -40,6 +42,10 @@ export interface AppOptions {
   readonly seed: string | null;
   readonly auth: AuthService;
   readonly leaderboard: Leaderboard;
+  /** Where coins and cosmetics live (local, or Firestore with a local cache). */
+  readonly inventory: InventoryRepository;
+  /** users/{uid} sync (nickname, account switch); null in offline builds. */
+  readonly cloud: FirestoreInventoryRepository | null;
 }
 
 type Screen = 'menu' | 'settings' | 'shop' | 'ranking' | 'match';
@@ -73,9 +79,8 @@ export class App {
   private readonly economyInstance: Economy;
   private readonly authService: AuthService;
   private readonly leaderboardService: Leaderboard;
+  private readonly cloudSync: FirestoreInventoryRepository | null;
   private readonly toasts = new Toasts();
-  /** Nicknames saved this session (works even when localStorage is blocked). */
-  private readonly nicknames = new Map<string, string>();
   private settings: Settings;
   private t: Translate;
   private formatScore: (value: number) => string;
@@ -94,6 +99,7 @@ export class App {
     this.settings = options.settings;
     this.authService = options.auth;
     this.leaderboardService = options.leaderboard;
+    this.cloudSync = options.cloud;
     this.matchLang = options.settings.language;
     this.t = createTranslator(this.settings.language);
     this.formatScore = createIntegerFormatter(this.settings.language);
@@ -104,14 +110,22 @@ export class App {
     options.root.replaceChildren(this.canvas, this.layer);
 
     this.gameInstance = new Game(this.canvas, this.view, this.audio);
-    this.economyInstance = new Economy(localInventoryRepository(options.store));
+    this.economyInstance = new Economy(options.inventory);
     this.gameInstance.setCosmetics(this.cosmetics());
-    this.economyInstance.subscribe((inventory, change) => {
-      if (change.type === 'equip') this.gameInstance.setCosmetics(this.cosmetics());
+    // Rebuilding the skin is not free (sprites, nebula): only when the equipment changed
+    // (equipped here, or a cloud version / another account arrived).
+    let equipped = this.economyInstance.inventory.equipped;
+    this.economyInstance.subscribe((inventory) => {
+      if (!sameEquipped(inventory.equipped, equipped)) {
+        equipped = inventory.equipped;
+        this.gameInstance.setCosmetics(this.cosmetics());
+      }
       this.screens.menu.setCoins(inventory.coins);
     });
     this.screens = this.buildScreens();
     this.authService.subscribe(() => this.onAccountChange());
+    // users/{uid} answered (nickname loaded or edited, account switched): refresh the badges.
+    this.cloudSync?.subscribe(() => this.refreshAccount());
     this.applySettings();
   }
 
@@ -133,6 +147,11 @@ export class App {
   /** Global ranking (dev console / end-to-end checks). */
   get leaderboard(): Leaderboard {
     return this.leaderboardService;
+  }
+
+  /** users/{uid} sync, null offline (dev console / end-to-end checks). */
+  get cloud(): FirestoreInventoryRepository | null {
+    return this.cloudSync;
   }
 
   /** What the player has equipped, resolved for the renderers. */
@@ -276,28 +295,24 @@ export class App {
         return;
     }
     this.audio.play('equip');
-    await this.askNicknameOnce(outcome.user.uid);
+    // First link of this account: pick the ranking nickname (an existing Google account has one).
+    if (outcome.kind === 'linked') await this.askNickname(outcome.user.uid);
     // Signed in from the Mission Report: this match can enter the ranking now.
     const finished = this.finished;
     if (this.reportShown && finished?.outcome?.kind === 'signIn') this.send(finished);
   }
 
-  /** First Google link on this device: ask for a nickname (cancel keeps the suggestion). */
-  private askNicknameOnce(uid: string): Promise<void> {
-    if (this.savedNickname(uid)) return Promise.resolve();
-    const suggestion = defaultNickname(uid);
+  /** First Google link: ask for a nickname (cancel keeps the current one, "Piloto" + 4 digits). */
+  private askNickname(uid: string): Promise<void> {
     return new Promise((resolve) => {
       this.screens.nickname.open({
-        initial: suggestion,
+        initial: this.nickname(uid),
         first: true,
         onSave: (name) => {
-          this.storeNickname(uid, name);
+          this.storeNickname(name);
           resolve();
         },
-        onCancel: () => {
-          this.storeNickname(uid, suggestion);
-          resolve();
-        },
+        onCancel: () => resolve(),
       });
     });
   }
@@ -308,27 +323,29 @@ export class App {
     this.screens.nickname.open({
       initial: this.nickname(uid),
       first: false,
-      onSave: (name) => this.storeNickname(uid, name),
+      onSave: (name) => this.storeNickname(name),
       onCancel: () => undefined,
     });
   };
 
-  private savedNickname(uid: string): string | null {
-    return this.nicknames.get(uid) ?? loadNickname(this.store, uid);
-  }
-
-  /** The ranking name: the chosen nickname, or the "Piloto" suggestion. */
+  /** The ranking name: users/{uid}.name, or the "Piloto" default until it was read. */
   private nickname(uid: string): string {
-    return this.savedNickname(uid) ?? defaultNickname(uid);
+    return this.cloudSync?.name ?? defaultNickname(uid);
   }
 
-  private storeNickname(uid: string, name: string): void {
-    this.nicknames.set(uid, name);
-    saveNickname(this.store, uid, name);
-    this.onAccountChange();
+  /** Profile write (users/{uid}.name), shown at once. */
+  private storeNickname(name: string): void {
+    this.cloudSync?.rename(name);
+    this.refreshAccount();
   }
 
   private onAccountChange(): void {
+    // The economy follows the signed-in account (its own users/{uid}).
+    this.cloudSync?.setUser(this.authService.account.uid);
+    this.refreshAccount();
+  }
+
+  private refreshAccount(): void {
     const account = this.authService.account;
     const nickname = account.status === 'google' && account.uid ? this.nickname(account.uid) : null;
     for (const badge of this.screens.badges) badge.update(account, nickname);
@@ -500,7 +517,7 @@ export class App {
     this.screens.shop.setVisible(false);
     this.screens.ranking.setVisible(false);
     this.screens = this.buildScreens();
-    this.onAccountChange();
+    this.refreshAccount();
     this.show(this.screen);
     if (this.screen === 'menu') this.screens.menu.focusGroup('language');
   }
