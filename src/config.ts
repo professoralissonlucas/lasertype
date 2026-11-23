@@ -245,6 +245,8 @@ const SYNC: SyncConfig = {
  */
 const RANKING: RankingConfig = {
   topSize: 50,
+  cacheSeconds: 300,
+  refreshSeconds: 30,
   maxWpm: 250,
   maxDuration: 3600,
   timeAttackMaxDuration: 65,

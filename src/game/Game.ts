@@ -182,6 +182,11 @@ export class Game {
     if (this.match) this.input.push(action);
   }
 
+  /** The on-screen keyboard opened or closed: while it is up, its space bar is not the EMP. */
+  setOnScreenKeyboard(open: boolean): void {
+    this.input.onScreenKeyboard = open;
+  }
+
   togglePause(): void {
     if (!this.match) return;
     togglePause(this.match.state, this.events);

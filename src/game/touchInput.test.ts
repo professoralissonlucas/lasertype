@@ -35,11 +35,12 @@ describe('editAction', () => {
     expect(IDLE_TEXT.length).toBeGreaterThan(0);
   });
 
-  it('the space bar is the EMP, like on a physical keyboard', () => {
-    expect(editAction(IDLE_TEXT, `${IDLE_TEXT} `)).toEqual({ type: 'emp' });
-    expect(editAction(`${IDLE_TEXT}sol`, `${IDLE_TEXT}sol `)).toEqual({ type: 'emp' });
-    // Keyboards that insert a no-break space.
-    expect(editAction(IDLE_TEXT, `${IDLE_TEXT} `)).toEqual({ type: 'emp' });
+  it('the space bar does nothing: the EMP is only its button', () => {
+    expect(editAction(IDLE_TEXT, `${IDLE_TEXT} `)).toBeNull();
+    expect(editAction(`${IDLE_TEXT}sol`, `${IDLE_TEXT}sol `)).toBeNull();
+    // Keyboards that insert a no-break space, and two taps that become ". ".
+    expect(editAction(IDLE_TEXT, `${IDLE_TEXT} `)).toBeNull();
+    expect(editAction(`${IDLE_TEXT}sol `, `${IDLE_TEXT}sol. `)).toBeNull();
   });
 
   it('a letter that comes with an automatic space is just the letter', () => {

@@ -2362,6 +2362,20 @@ kbd {
   color: var(--combo);
 }
 
+.ranking__update {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 12px;
+}
+
+/* Wide enough for every label: the countdown does not move it. */
+.ranking__update .btn {
+  min-width: 152px;
+}
+
 .ranking__table {
   width: 100%;
   border-collapse: collapse;
@@ -2579,7 +2593,8 @@ kbd {
   font-size: 12px;
 }
 
-.btn:disabled {
+.btn:disabled,
+.btn[aria-disabled='true'] {
   opacity: 0.45;
   cursor: default;
   box-shadow: none;

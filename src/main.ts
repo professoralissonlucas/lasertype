@@ -31,7 +31,7 @@ function start(root: HTMLElement): void {
   const appCheck = firebase ? appCheckKey() : null;
   const sdk = firebase ? () => loadFirebase(firebase, appCheck) : null;
   const auth = new AuthService(sdk && (() => sdk().then(firebaseAuthBackend)));
-  const leaderboard = new Leaderboard(sdk && (() => sdk().then(firestoreLeaderboardBackend)));
+  const leaderboard = new Leaderboard(sdk && (() => sdk().then(firestoreLeaderboardBackend)), store);
   const cloud = sdk && new FirestoreInventoryRepository({ store, backend: () => sdk().then(firestoreUserBackend) });
   const inventory = cloud ?? localInventoryRepository(store);
 

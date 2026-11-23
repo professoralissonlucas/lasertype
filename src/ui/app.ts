@@ -259,6 +259,7 @@ export class App {
   private readonly onViewport: ViewportListener = (state, previous) => {
     const { width, height } = this.root.getBoundingClientRect();
     this.root.classList.toggle('is-compact', isCompact(width, height));
+    this.gameInstance.setOnScreenKeyboard(state.keyboard);
     // The player closed the keyboard in the middle of the match: pause, like leaving the tab.
     const closed = previous.keyboard && !state.keyboard;
     if (closed && this.playing && performance.now() >= this.keyboardGrace) this.gameInstance.togglePause();
@@ -349,6 +350,7 @@ export class App {
       report.setRanking({ text: this.t('reportRankSending'), tone: 'info', signIn: false });
     }
     void this.leaderboardService.submit(finished.match, this.submitter()).then((outcome) => {
+      if (outcome.kind === 'record') this.screens.ranking.onRecord();
       if (finished.serial !== this.matchSerial || !this.reportShown) return;
       finished.outcome = outcome;
       this.screens.report.setRanking(this.rankingLine(outcome, finished.match));

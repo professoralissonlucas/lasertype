@@ -81,6 +81,13 @@ describe('keyToAction', () => {
     expect(keyToAction(key(' '))).toEqual({ type: 'emp' });
   });
 
+  it('with the on-screen keyboard up, only the space bar changes: it is not the EMP', () => {
+    expect(keyToAction(key(' '), true)).toBeNull();
+    for (const value of ['a', 'É', 'Backspace', 'Tab', 'Enter', 'Escape', '1']) {
+      expect(keyToAction(key(value), true), value).toEqual(keyToAction(key(value), false));
+    }
+  });
+
   it('ignores non-letter keys', () => {
     for (const value of ['1', '-', 'Dead', 'Shift', 'ArrowLeft', 'F5', 'Process']) {
       expect(keyToAction(key(value))).toBeNull();

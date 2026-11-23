@@ -23,10 +23,9 @@ export function editAction(previous: string, next: string): InputAction | null {
   if (added === '') return removed === '' ? null : { type: 'unlock' };
 
   const letters = lettersOf(added);
-  if (letters.length === 0) {
-    // The space bar, like on a physical keyboard. Anything else (digits, punctuation) is ignored.
-    return removed === '' && added.trim() === '' ? { type: 'emp' } : null;
-  }
+  // Digits, punctuation and the space bar: words have none of them. Here the EMP is only its
+  // button (a physical space bar never gets this far: keydown takes it).
+  if (letters.length === 0) return null;
   // Letters replaced by others: the keyboard correcting or completing what was already typed.
   if (lettersOf(removed).length > 0) return null;
   const [letter] = letters;

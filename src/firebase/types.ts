@@ -3,10 +3,14 @@
 import type { GameDifficulty } from '../game/types.ts';
 import type { Language } from '../words/types.ts';
 
-/** Limits of a score document, mirrored from firestore.rules (validScore). */
+/** The ranking; the limits of a score document are mirrored from firestore.rules (validScore). */
 export interface RankingConfig {
   /** Rows shown per board. */
   readonly topSize: number;
+  /** A board is read again only after this long… */
+  readonly cacheSeconds: number;
+  /** …or when the player presses "Atualizar", at most this often. */
+  readonly refreshSeconds: number;
   readonly maxWpm: number;
   /** Seconds. */
   readonly maxDuration: number;

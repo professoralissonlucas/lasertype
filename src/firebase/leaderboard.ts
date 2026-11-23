@@ -7,6 +7,8 @@
 //   is not sent (the rules only accept the current day, and the next day's board is another game);
 // - createdAt = serverTimestamp(); duration in seconds (pauses excluded).
 // The client checks the same limits as the rules first, so it never sends a doomed write.
+// Boards are cached (rankingCache.ts): the screen reads them again only when they expire or the
+// player asks, and a new record only changes the player's own row in the cache.
 import { CONFIG } from '../config.ts';
 import { maxPointsPerSecond } from '../game/scoring.ts';
 import type { GameDifficulty } from '../game/types.ts';
@@ -14,10 +16,13 @@ import { MODES } from '../modes/index.ts';
 import type { ModeId } from '../modes/types.ts';
 import { isValidNickname } from '../profile/nickname.ts';
 import { dayIndex } from '../utils/day.ts';
+import type { KeyValueStore } from '../utils/storage.ts';
 import { longestWordLength } from '../words/index.ts';
 import type { Language } from '../words/types.ts';
 import type { FirebaseSdk } from './app.ts';
 import { errorCode } from './auth.ts';
+import { RankingCache, type CachedBoard, type OwnStanding } from './rankingCache.ts';
+import { parseRow, withRecord } from './rankRows.ts';
 import { RANKED_MODES, type Board, type RankedMode, type RankingConfig, type RankRow, type ScoreFields } from './types.ts';
 
 export const SCORES = 'scores';
@@ -37,11 +42,6 @@ export function dailyBoard(lang: Language, day: number): Board {
 /** The board to show now: the daily mode has only today's, on its fixed difficulty. */
 export function boardAt(mode: RankedMode, diff: GameDifficulty, lang: Language, epochMs: number): Board {
   return mode === 'daily' ? dailyBoard(lang, dayIndex(epochMs)) : { mode, diff, lang, day: 0 };
-}
-
-/** Places of rows sorted best first: 1 + how many scored more (ties share a place). */
-export function placesOf(rows: readonly { readonly score: number }[]): number[] {
-  return rows.map((row) => 1 + rows.findIndex((other) => other.score === row.score));
 }
 
 /** `${uid}_${mode}_${diff}_${lang}_${day}` */
@@ -103,21 +103,6 @@ export function scoreProblems(
   if (!(fields.duration > 0) || fields.duration > maxDuration) problems.push('duration');
   else if (fields.score > fields.duration * maxPps) problems.push('tooManyPoints');
   return problems;
-}
-
-/** Firestore data → a row, or null when the document is malformed (it is untrusted input). */
-export function parseRow(data: unknown): RankRow | null {
-  if (typeof data !== 'object' || data === null) return null;
-  const d = data as Record<string, unknown>;
-  const { uid, name, score, wpm, accuracy } = d;
-  if (typeof uid !== 'string' || typeof name !== 'string' || typeof score !== 'number') return null;
-  return {
-    uid,
-    name,
-    score,
-    wpm: typeof wpm === 'number' ? wpm : 0,
-    accuracy: typeof accuracy === 'number' ? accuracy : 0,
-  };
 }
 
 /** What Leaderboard needs from Firestore (lets tests use a fake). */
@@ -193,18 +178,47 @@ export interface Submitter {
   readonly name: string;
 }
 
-/** Rows are cached this long per board (fewer reads when flipping tabs). */
-const CACHE_MS = 30_000;
+/** A board as the ranking screen shows it. */
+export interface BoardView {
+  /** When the rows were read (epoch ms). */
+  readonly at: number;
+  /** Best first, up to the top size. */
+  readonly rows: readonly RankRow[];
+  /** The player's own row when outside `rows`; null without a score on this board. */
+  readonly own: RankRow | null;
+  /** Its exact place, only in the Daily Challenge (it decides the bonus). */
+  readonly ownPlace: number | null;
+}
+
+/** Starts `task`, or joins the one already running under `key`. */
+function shared<T>(running: Map<string, Promise<T>>, key: string, task: () => Promise<T>): Promise<T> {
+  let run = running.get(key);
+  if (!run) {
+    run = task().finally(() => running.delete(key));
+    running.set(key, run);
+  }
+  return run;
+}
 
 export class Leaderboard {
   private readonly load: (() => Promise<LeaderboardBackend>) | null;
   private readonly now: () => number;
-  private readonly cache = new Map<string, { readonly at: number; readonly rows: readonly RankRow[] }>();
+  private readonly cache: RankingCache;
+  /** Reads on their way, so that flipping tabs fast never starts the same one twice. */
+  private readonly readingRows = new Map<string, Promise<CachedBoard>>();
+  private readonly readingView = new Map<string, Promise<BoardView>>();
+  /** Records sent this session: rows that were being read meanwhile may still bring the old one. */
+  private readonly sent = new Map<string, RankRow>();
 
-  /** `load` = null for an offline build (no Firebase config). */
-  constructor(load: (() => Promise<LeaderboardBackend>) | null, now: () => number = Date.now) {
+  /** `load` = null for an offline build (no Firebase config); `store` keeps the boards read. */
+  constructor(
+    load: (() => Promise<LeaderboardBackend>) | null,
+    store: KeyValueStore | null = null,
+    now: () => number = Date.now,
+  ) {
     this.load = load;
     this.now = now;
+    this.cache = new RankingCache(store, now);
   }
 
   get available(): boolean {
@@ -236,33 +250,85 @@ export class Leaderboard {
         if (fields.mode === 'daily' && errorCode(error) === 'permission-denied') return { kind: 'refused' };
         throw error;
       }
-      this.cache.delete(boardKey(fields));
-      return { kind: 'record', previous, position: await placeToday(backend, fields, fields.score) };
+      const position = await placeToday(backend, fields, fields.score);
+      this.cacheRecord(fields, position);
+      return { kind: 'record', previous, position };
     } catch {
       return { kind: 'error' };
     }
   }
 
-  /** Best rows of a board (throws when offline or refused: the screen shows the error). */
-  async top(board: Board): Promise<readonly RankRow[]> {
-    if (!this.load) return [];
-    const key = boardKey(board);
-    const cached = this.cache.get(key);
-    if (cached && this.now() - cached.at < CACHE_MS) return cached.rows;
-    const backend = await this.load();
-    const rows = await backend.top(board, CONFIG.ranking.topSize);
-    this.cache.set(key, { at: this.now(), rows });
-    return rows;
+  /**
+   * What the ranking screen shows for a player (`uid` null = not in the ranking): from the cache
+   * while it is good, else from the server. `refresh` ("Atualizar") reads it again, unless it is
+   * too soon (`refreshWait`). Throws when offline or refused: the screen shows the error.
+   */
+  async view(board: Board, uid: string | null, refresh = false): Promise<BoardView> {
+    const load = this.load;
+    if (!load) return { at: this.now(), rows: [], own: null, ownPlace: null };
+    const again = refresh && this.refreshWait(board) === 0;
+    if (again) this.cache.markRefresh();
+    return shared(this.readingView, `${boardKey(board)}|${uid ?? ''}|${again}`, async () => {
+      const { at, rows, own: cached } = await this.rowsOf(load, board, again);
+      if (uid === null || rows.some((row) => row.uid === uid)) return { at, rows, own: null, ownPlace: null };
+      const own = cached?.uid === uid ? cached : await this.readOwn(board, uid);
+      return { at, rows, own: own.row, ownPlace: own.place };
+    });
   }
 
-  /** The player's own row on a board (for when they are outside the top). */
+  /** Milliseconds until "Atualizar" can be used on a board (0 = now). */
+  refreshWait(board: Board): number {
+    return this.cache.refreshWait(boardKey(board));
+  }
+
+  private async rowsOf(load: () => Promise<LeaderboardBackend>, board: Board, again: boolean): Promise<CachedBoard> {
+    const key = boardKey(board);
+    const cached = again ? null : this.cache.get(key);
+    if (cached) return cached;
+    return shared(this.readingRows, key, async () => {
+      const { topSize } = CONFIG.ranking;
+      const backend = await load();
+      const read = await backend.top(board, topSize);
+      const record = this.sent.get(key);
+      const rows = record ? withRecord(read, record, topSize) : read;
+      const entry: CachedBoard = { at: this.now(), rows, own: null };
+      this.cache.put(key, entry);
+      return entry;
+    });
+  }
+
+  /** A player outside the rows: their score and, in the Daily Challenge, its exact place. */
+  private async readOwn(board: Board, uid: string): Promise<OwnStanding> {
+    const row = await this.own(board, uid);
+    const place = row && board.mode === 'daily' ? await this.position(board, row.score) : null;
+    const own: OwnStanding = { uid, row, place };
+    this.cache.update(boardKey(board), (entry) => ({ ...entry, own }));
+    return own;
+  }
+
+  /** A record was accepted: only the player's own row changes in the cache, nothing is read again. */
+  private cacheRecord(fields: ScoreFields, place: number | null): void {
+    const key = boardKey(fields);
+    const { uid, name, score, wpm, accuracy } = fields;
+    const row: RankRow = { uid, name, score, wpm, accuracy };
+    this.sent.set(key, row);
+    this.cache.update(key, (entry) => {
+      const rows = withRecord(entry.rows, row, CONFIG.ranking.topSize);
+      const inTop = rows.some((other) => other.uid === uid);
+      // Outside the top, a Daily Challenge place that could not be counted is asked for again.
+      const unknown = fields.mode === 'daily' && place === null;
+      return { ...entry, rows, own: inTop || unknown ? null : { uid, row, place } };
+    });
+  }
+
+  /** The player's own row on a board, straight from the server. */
   async own(board: Board, uid: string): Promise<RankRow | null> {
     if (!this.load) return null;
     const backend = await this.load();
     return backend.row(scoreDocId(uid, board));
   }
 
-  /** The place of `score` on a board: 1 + how many scored more. null in an offline build. */
+  /** The place of `score` on a board (1 + how many scored more), straight from the server; null offline. */
   async position(board: Board, score: number): Promise<number | null> {
     if (!this.load) return null;
     const backend = await this.load();

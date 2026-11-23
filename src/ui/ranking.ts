@@ -2,9 +2,11 @@
 // own row highlighted (or shown below the table when outside the top). Esc returns.
 // The "Diário" tab shows today's challenge only (no difficulty filter): countdown to the next
 // one, the player's place and the coin bonus. It reloads by itself when the day turns.
+// Boards come from a cache (firebase/leaderboard.ts): "Atualizar" reads the one shown again.
 import { CONFIG } from '../config.ts';
 import { dailyPrizes } from '../economy/dailyBonus.ts';
-import { boardAt, placesOf, type Leaderboard } from '../firebase/leaderboard.ts';
+import { boardAt, type BoardView, type Leaderboard } from '../firebase/leaderboard.ts';
+import { placesOf } from '../firebase/rankRows.ts';
 import { RANKED_MODES, type AccountState, type Board, type RankedMode, type RankRow } from '../firebase/types.ts';
 import { GAME_DIFFICULTIES, type GameDifficulty } from '../game/types.ts';
 import { dayIndex, msUntilNextDay } from '../utils/day.ts';
@@ -37,7 +39,7 @@ export interface RankingOptions {
 
 type View = 'loading' | 'rows' | 'empty' | 'error' | 'unavailable';
 
-/** Countdown refresh (also notices when the day turns). */
+/** Countdowns (also notices when the day turns). */
 const TICK_MS = 1000;
 
 /** The signed-in player on the board shown. */
@@ -56,6 +58,9 @@ export class RankingScreen {
   private readonly dailyCountdown: HTMLElement;
   private readonly dailyOwn: HTMLElement;
   private readonly dailyPrizes: HTMLElement;
+  private readonly updateBar: HTMLElement;
+  private readonly updateAge: HTMLElement;
+  private readonly updateButton: HTMLButtonElement;
   private readonly table: HTMLTableElement;
   private readonly body: HTMLTableSectionElement;
   private readonly ownBody: HTMLTableSectionElement;
@@ -65,6 +70,13 @@ export class RankingScreen {
   private choice: RankingChoice;
   /** Board on screen: today's one in the daily mode. */
   private board: Board;
+  /** Player it is shown for (null = not in the ranking). */
+  private uid: string | null = null;
+  /** When the rows on screen were read (epoch ms); null = none on screen. */
+  private shownAt: number | null = null;
+  /** "Atualizar" is on its way, or the last one failed. */
+  private updating = false;
+  private updateFailed = false;
   private tickTimer: number | null = null;
   /** Ignores answers to requests that were superseded (fast tab flipping). */
   private request = 0;
@@ -141,6 +153,17 @@ export class RankingScreen {
       ),
     );
 
+    // How old the rows are, and "Atualizar".
+    this.updateBar = el('div', 'ranking__update');
+    this.updateAge = el('span', 'ranking__update-age');
+    this.updateAge.setAttribute('aria-live', 'polite');
+    this.updateButton = el('button', 'btn btn--small');
+    this.updateButton.type = 'button';
+    this.updateButton.addEventListener('click', () => {
+      if (this.updateButton.getAttribute('aria-disabled') !== 'true') void this.refresh(true);
+    });
+    this.updateBar.append(this.updateAge, this.updateButton);
+
     // Table.
     this.table = el('table', 'ranking__table');
     this.table.id = 'ranking-table';
@@ -166,13 +189,16 @@ export class RankingScreen {
     this.status = el('div', 'ranking__status');
     this.statusText = el('p', undefined);
     this.statusText.setAttribute('aria-live', 'polite');
-    this.retryButton = button('btn btn--small', t('rankingRetry'), () => void this.refresh(true));
+    this.retryButton = button('btn btn--small', t('rankingRetry'), () => {
+      this.retryButton.blur();
+      void this.refresh();
+    });
     this.status.append(this.statusText, this.retryButton);
 
     const footer = el('div', 'panel__footer');
     footer.append(el('p', 'panel__note', t('rankingHint')), button('btn', t('back'), () => options.onBack(), 'Esc'));
 
-    panel.append(header, tabList, filters, this.daily, this.table, this.status, footer);
+    panel.append(header, tabList, filters, this.daily, this.updateBar, this.table, this.status, footer);
     this.root.append(panel);
     this.syncChoice();
   }
@@ -196,8 +222,14 @@ export class RankingScreen {
     this.tabs[this.choice.mode].focus({ preventScroll: true });
   }
 
-  /** Account changed (linked, switched): re-highlight the player's row. */
+  /** Account linked or switched: re-highlight the player's row (or try again after an error). */
   onAccountChange(): void {
+    if (this.root.hidden) return;
+    if (this.playerUid() !== this.uid || this.root.dataset.view === 'error') void this.refresh();
+  }
+
+  /** A record was accepted while this screen was open: it is already in the cache. */
+  onRecord(): void {
     if (!this.root.hidden) void this.refresh();
   }
 
@@ -205,6 +237,12 @@ export class RankingScreen {
     this.choice = { ...this.choice, ...patch };
     this.syncChoice();
     void this.refresh();
+  }
+
+  /** The player, when they are in the ranking (Google accounts only). */
+  private playerUid(): string | null {
+    const { status, uid } = this.o.account();
+    return status === 'google' ? uid : null;
   }
 
   private currentBoard(): Board {
@@ -240,6 +278,7 @@ export class RankingScreen {
   }
 
   private readonly tick = (): void => {
+    this.syncUpdate();
     if (this.choice.mode !== 'daily') return;
     this.syncCountdown();
     // The day turned: today's challenge is another board now.
@@ -257,50 +296,71 @@ export class RankingScreen {
     this.dailyOwn.textContent = own ? dailyPlaceText(t, formatNumber, own.place, own.row.score, this.board.lang) : '';
   }
 
-  private async refresh(retry = false): Promise<void> {
-    const { leaderboard, account, language } = this.o;
+  /** How old the rows are, and whether "Atualizar" can be used. Only writes what changed. */
+  private syncUpdate(): void {
+    this.updateBar.hidden = this.shownAt === null;
+    if (this.shownAt === null) return;
+    const { t, leaderboard } = this.o;
+    const minutes = Math.floor((Date.now() - this.shownAt) / 60_000);
+    const age = minutes < 1 ? t('rankingUpdatedNow') : t('rankingUpdatedAgo', { n: minutes });
+    const wait = Math.ceil(leaderboard.refreshWait(this.board) / 1000);
+    const label = wait > 0 ? t('rankingUpdateWait', { n: wait }) : t('rankingUpdate');
+    const set = (node: HTMLElement, text: string): void => {
+      if (node.textContent !== text) node.textContent = text;
+    };
+    set(this.updateAge, this.updateFailed ? t('rankingUpdateError') : age);
+    set(this.updateButton, this.updating ? t('rankingUpdating') : label);
+    this.updateButton.setAttribute('aria-disabled', String(this.updating || wait > 0));
+  }
+
+  /** Shows the board chosen: from the cache or, when it expired or with `update`, read again. */
+  private async refresh(update = false): Promise<void> {
+    const { leaderboard, language } = this.o;
     const board = this.currentBoard();
+    // "Atualizar" keeps the rows in sight, unless the day turned: that is another board.
+    const keep = update && board.day === this.board.day;
+    const uid = this.playerUid();
     this.board = board;
+    this.uid = uid;
     this.dailyTitle.textContent = this.o.t('dailyTitle', { date: formatGameDay(board.day, language) });
     this.syncCountdown();
-    this.syncOwn(null);
     if (!leaderboard.available) {
+      this.syncOwn(null);
       this.show('unavailable');
       return;
     }
     const request = ++this.request;
-    this.show('loading');
-    if (retry) this.retryButton.blur();
+    this.updating = keep;
+    this.updateFailed = false;
+    if (keep) {
+      this.syncUpdate();
+    } else {
+      this.syncOwn(null);
+      this.show('loading');
+    }
     try {
-      const rows = await leaderboard.top(board);
-      const me = account();
-      const uid = me.status === 'google' ? me.uid : null;
-      const places = placesOf(rows);
-      const index = uid === null ? -1 : rows.findIndex((row) => row.uid === uid);
-      const inTop = rows[index];
-      const own = uid !== null && !inTop ? await leaderboard.own(board, uid) : null;
-      // Outside the top, only the Daily Challenge needs the exact place (it decides the bonus).
-      const ownPlace = own && board.mode === 'daily' ? await leaderboard.position(board, own.score) : null;
+      const view = await leaderboard.view(board, uid, update);
       if (request !== this.request) return;
-      this.render(rows, places, own, ownPlace, uid);
-      if (inTop) this.syncOwn({ row: inTop, place: places[index] ?? index + 1 });
-      else this.syncOwn(own && ownPlace !== null ? { row: own, place: ownPlace } : null);
-      this.show(rows.length === 0 && !own ? 'empty' : 'rows');
+      this.updating = false;
+      this.render(view, uid);
     } catch {
       if (request !== this.request) return;
-      this.show('error');
+      this.updating = false;
+      this.updateFailed = keep;
+      if (keep) this.syncUpdate();
+      else this.show('error');
     }
   }
 
-  private render(
-    rows: readonly RankRow[],
-    places: readonly number[],
-    own: RankRow | null,
-    ownPlace: number | null,
-    uid: string | null,
-  ): void {
+  private render({ at, rows, own, ownPlace }: BoardView, uid: string | null): void {
+    const places = placesOf(rows);
     this.body.replaceChildren(...rows.map((row, i) => this.row(String(places[i] ?? i + 1), row, row.uid === uid)));
     this.ownBody.replaceChildren(...(own ? [this.row(ownPlace === null ? '—' : String(ownPlace), own, true)] : []));
+    const index = uid === null ? -1 : rows.findIndex((row) => row.uid === uid);
+    const inTop = rows[index];
+    if (inTop) this.syncOwn({ row: inTop, place: places[index] ?? index + 1 });
+    else this.syncOwn(own && ownPlace !== null ? { row: own, place: ownPlace } : null);
+    this.show(rows.length === 0 && !own ? 'empty' : 'rows', at);
   }
 
   private row(rank: string, data: RankRow, you: boolean): HTMLTableRowElement {
@@ -320,8 +380,11 @@ export class RankingScreen {
     return tr;
   }
 
-  private show(view: View): void {
+  /** `at`: when the rows were read (views 'rows' and 'empty'). */
+  private show(view: View, at: number | null = null): void {
     const { t } = this.o;
+    this.shownAt = at;
+    this.syncUpdate();
     this.table.hidden = view !== 'rows';
     this.status.hidden = view === 'rows';
     this.retryButton.hidden = view !== 'error';

@@ -47,8 +47,12 @@ const CONFIRM: InputAction = { type: 'confirm' };
 const PAUSE: InputAction = { type: 'pause' };
 const EMP: InputAction = { type: 'emp' };
 
-/** Maps a key press to a game action, or null when the game should ignore it. */
-export function keyToAction(event: KeyLike): InputAction | null {
+/**
+ * Maps a key press to a game action, or null when the game should ignore it. With the on-screen
+ * keyboard up the space bar does nothing: words have no spaces, so it is always an accidental
+ * tap (iPhones send it as a real key press; the others go through game/touchInput.ts).
+ */
+export function keyToAction(event: KeyLike, onScreenKeyboard = false): InputAction | null {
   if (event.isComposing) return null;
   // Leave browser/OS shortcuts alone. Ctrl+Alt is AltGr on Windows layouts, so it still types.
   if (event.metaKey || (event.ctrlKey && !event.altKey)) return null;
@@ -63,7 +67,7 @@ export function keyToAction(event: KeyLike): InputAction | null {
     case 'Escape':
       return PAUSE;
     case ' ':
-      return EMP;
+      return onScreenKeyboard ? null : EMP;
   }
 
   const key = event.key.normalize('NFC');
@@ -76,6 +80,8 @@ export function keyToAction(event: KeyLike): InputAction | null {
  * once per fixed update.
  */
 export class KeyboardInput {
+  /** The on-screen keyboard is up (its space bar is not the EMP). */
+  onScreenKeyboard = false;
   private readonly queue: InputAction[] = [];
   private target: Window | null = null;
 
@@ -101,7 +107,7 @@ export class KeyboardInput {
   }
 
   private readonly onKeyDown = (event: KeyboardEvent): void => {
-    const action = keyToAction(event);
+    const action = keyToAction(event, this.onScreenKeyboard);
     if (!action) return;
     // Stop Tab from moving focus and Backspace from navigating, even on auto-repeat.
     event.preventDefault();
