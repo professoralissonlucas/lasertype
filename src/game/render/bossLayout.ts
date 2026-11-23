@@ -23,6 +23,16 @@ export const BOSS_LAYOUT = {
   hidden: 40,
 } as const;
 
+/** Phones: a tighter plate, so the boss still has a descent to make on a short field. */
+export const BOSS_COMPACT = {
+  fontScale: 1,
+  lineHeight: 1.75,
+  padX: 14,
+  padY: 12,
+  sideGap: 6,
+  topGap: 26,
+} as const;
+
 export interface BossWordBox {
   readonly text: string;
   readonly line: number;
@@ -38,6 +48,8 @@ export interface BossPlate {
   readonly width: number;
   readonly height: number;
   readonly lines: number;
+  /** Above the first line. */
+  readonly padY: number;
   readonly words: readonly BossWordBox[];
 }
 
@@ -69,11 +81,13 @@ export function wrapBalanced(lengths: readonly number[], gap: number, maxChars: 
 
 /** `charWidth` = one character of the falling words' font. */
 export function computeBossPlate(layout: Layout, charWidth: number, texts: readonly string[]): BossPlate {
-  const { wordGap, padX, padY, sideGap, maxTextWidth, narrowField } = BOSS_LAYOUT;
-  const fontScale = layout.fieldWidth < narrowField ? 1 : BOSS_LAYOUT.fontScale;
+  const { wordGap, maxTextWidth, narrowField } = BOSS_LAYOUT;
+  const sizes = layout.compact ? BOSS_COMPACT : BOSS_LAYOUT;
+  const { padX, padY, sideGap } = sizes;
+  const fontScale = layout.fieldWidth < narrowField ? 1 : sizes.fontScale;
   const fontSize = layout.fontSize * fontScale;
   const bossChar = charWidth * fontScale;
-  const lineHeight = fontSize * BOSS_LAYOUT.lineHeight;
+  const lineHeight = fontSize * sizes.lineHeight;
   const available = Math.min(maxTextWidth, layout.fieldWidth - 2 * (padX + sideGap));
   const maxChars = Math.max(1, Math.floor(available / bossChar));
 
@@ -103,6 +117,7 @@ export function computeBossPlate(layout: Layout, charWidth: number, texts: reado
     width: Math.max(...lineChars) * bossChar + padX * 2,
     height: lines * lineHeight + padY * 2,
     lines,
+    padY,
     words,
   };
 }
@@ -117,7 +132,8 @@ export function bossCenterX(layout: Layout): number {
  * takes its LOWER edge down to the perimeter.
  */
 export function bossTop(layout: Layout, plate: BossPlate, y: number, entrance: number): number {
-  const restBottom = Math.min(layout.fieldTop + BOSS_LAYOUT.topGap + plate.height, layout.perimeterY);
+  const { topGap } = layout.compact ? BOSS_COMPACT : BOSS_LAYOUT;
+  const restBottom = Math.min(layout.fieldTop + topGap + plate.height, layout.perimeterY);
   const restTop = restBottom - plate.height;
   if (entrance < 1) {
     const eased = 1 - (1 - Math.max(0, entrance)) ** 3;
@@ -129,7 +145,7 @@ export function bossTop(layout: Layout, plate: BossPlate, y: number, entrance: n
 /** Vertical center of a word's line. */
 export function bossWordY(plate: BossPlate, top: number, word: number): number {
   const line = plate.words[word]?.line ?? 0;
-  return top + BOSS_LAYOUT.padY + (line + 0.5) * plate.lineHeight;
+  return top + plate.padY + (line + 0.5) * plate.lineHeight;
 }
 
 /** Left edge of a word's text. */

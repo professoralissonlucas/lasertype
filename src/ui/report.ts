@@ -58,6 +58,12 @@ const STAT_LABEL: Readonly<Record<StatKey, StringKey>> = {
   bosses: 'statBosses',
 };
 
+/**
+ * The report opens where the on-screen keyboard was: for this long (ms), the letters a touch
+ * player was still typing must not press its buttons.
+ */
+const ARM_MS = 700;
+
 export class ReportScreen {
   readonly root: HTMLElement;
   private readonly t: Translate;
@@ -80,6 +86,7 @@ export class ReportScreen {
   private readonly rankText: HTMLElement;
   private readonly rankSignIn: HTMLButtonElement;
   private readonly stats: Record<StatKey, HTMLElement>;
+  private armTimer: number | null = null;
 
   constructor(t: Translate, language: Language, formatScore: (value: number) => string, callbacks: ReportCallbacks) {
     this.t = t;
@@ -210,6 +217,8 @@ export class ReportScreen {
     // Only matches that beat one show the row.
     this.stats.bosses.parentElement?.toggleAttribute('hidden', report.bosses === 0);
     this.root.hidden = false;
+    this.root.classList.add('is-arming');
+    this.armTimer = window.setTimeout(() => this.root.classList.remove('is-arming'), ARM_MS);
   }
 
   private showProgress(report: MatchReport, outcome: MatchOutcome, player: ReportPlayer): void {
@@ -262,5 +271,7 @@ export class ReportScreen {
 
   hide(): void {
     this.root.hidden = true;
+    if (this.armTimer !== null) window.clearTimeout(this.armTimer);
+    this.armTimer = null;
   }
 }

@@ -177,6 +177,11 @@ export class Game {
     this.resetMatchVisuals();
   }
 
+  /** An action from outside the keyboard (touch typing, on-screen buttons), in order with the keys. */
+  send(action: InputAction): void {
+    if (this.match) this.input.push(action);
+  }
+
   togglePause(): void {
     if (!this.match) return;
     togglePause(this.match.state, this.events);
@@ -431,7 +436,7 @@ export class Game {
           viewDirty = true;
           break;
         case 'shieldUp':
-          this.effects.shieldUp(layout.cannonX, layout.cannonY - SHIELD_GLOW_OFFSET);
+          this.effects.shieldUp(layout.cannonX, layout.cannonY - SHIELD_GLOW_OFFSET * layout.cannonScale);
           this.sound.play('shieldUp');
           viewDirty = true;
           break;
@@ -473,7 +478,7 @@ export class Game {
     // Sideways offset (twin barrels): perpendicular to the barrel direction.
     const shot = this.cannon.shots;
     this.cannon.kick(barrelOf(this.cosmetics.cannon, shot));
-    const side = muzzleSideOffset(this.cosmetics.cannon, shot);
+    const side = muzzleSideOffset(this.cosmetics.cannon, shot) * layout.cannonScale;
     const mx = muzzle.x + Math.cos(this.cannon.angle) * side;
     const my = muzzle.y + Math.sin(this.cannon.angle) * side;
     this.lasers.fire(mx, my, tx, ty, LASER_LIFETIME);

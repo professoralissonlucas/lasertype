@@ -9,6 +9,8 @@ const SILENCE = 0.0001;
 /** Small scheduling headroom so the first sample is never in the past. */
 const LOOKAHEAD = 0.005;
 const NOISE_SECONDS = 1;
+/** A finger only counts as a gesture when it lifts (a mouse already counts when it presses). */
+const GESTURES = ['keydown', 'pointerdown', 'pointerup'] as const;
 
 export class AudioEngine implements SoundPlayer {
   private ctx: AudioContext | null = null;
@@ -29,13 +31,11 @@ export class AudioEngine implements SoundPlayer {
   attach(target: Window): void {
     this.detach();
     this.target = target;
-    target.addEventListener('keydown', this.unlock, { capture: true });
-    target.addEventListener('pointerdown', this.unlock, { capture: true });
+    for (const type of GESTURES) target.addEventListener(type, this.unlock, { capture: true });
   }
 
   detach(): void {
-    this.target?.removeEventListener('keydown', this.unlock, { capture: true });
-    this.target?.removeEventListener('pointerdown', this.unlock, { capture: true });
+    for (const type of GESTURES) this.target?.removeEventListener(type, this.unlock, { capture: true });
     this.target = null;
   }
 
@@ -67,7 +67,8 @@ export class AudioEngine implements SoundPlayer {
       this.noise = ctx.createBuffer(1, length, ctx.sampleRate);
       this.noise.copyToChannel(createNoiseSamples(length, this.rng), 0);
     }
-    if (this.ctx.state === 'suspended') void this.ctx.resume();
+    // Also 'interrupted' on iOS (a phone call, another app's sound).
+    if (this.ctx.state !== 'running') void this.ctx.resume();
   };
 
   play(name: SoundName, pitch = 1): void {

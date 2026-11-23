@@ -69,6 +69,9 @@ export class Renderer {
   private dpr = 1;
   private watchedDpr = 0;
   private dprQuery: MediaQueryList | null = null;
+  /** The canvas can change size without a window `resize` (the keyboard of a phone). */
+  private readonly sizeObserver = new ResizeObserver(() => this.onCanvasSize());
+  private resizePending = false;
 
   /** Current layout in CSS pixels. */
   layout: Layout = computeLayout(1, 1);
@@ -92,6 +95,7 @@ export class Renderer {
 
   attach(): void {
     window.addEventListener('resize', this.resize);
+    this.sizeObserver.observe(this.canvas);
     // Re-measure once web fonts finish loading (character width may change).
     void document.fonts.ready.then(this.resize);
     this.resize();
@@ -99,12 +103,14 @@ export class Renderer {
 
   detach(): void {
     window.removeEventListener('resize', this.resize);
+    this.sizeObserver.disconnect();
     this.dprQuery?.removeEventListener('change', this.resize);
     this.dprQuery = null;
   }
 
   /** Matches the backing store to the CSS size × devicePixelRatio. */
   readonly resize = (): void => {
+    this.resizePending = false;
     const rect = this.canvas.getBoundingClientRect();
     const width = Math.max(1, rect.width);
     const height = Math.max(1, rect.height);
@@ -124,6 +130,15 @@ export class Renderer {
     if (dpr !== this.watchedDpr) this.watchDpr(dpr);
   };
 
+  /**
+   * Observers run after this frame was drawn: resizing here would show a cleared canvas, so
+   * it waits for the next draw.
+   */
+  private onCanvasSize(): void {
+    const { width, height } = this.canvas.getBoundingClientRect();
+    this.resizePending = Math.max(1, width) !== this.layout.width || Math.max(1, height) !== this.layout.height;
+  }
+
   /** Geometry of a boss on this screen. */
   bossPlate(boss: Readonly<Boss>): BossPlate {
     const { layout } = this;
@@ -139,6 +154,7 @@ export class Renderer {
   }
 
   draw(frame: RenderFrame): void {
+    if (this.resizePending) this.resize();
     const { ctx, layout, skin } = this;
     const { effects } = frame;
 
@@ -155,8 +171,12 @@ export class Renderer {
     else if (effects.wreck) this.drawWreck(effects.wreck, frame);
     drawParticles(ctx, effects.particles, frame.fxAlpha, skin, this.wordFont);
     drawBeams(ctx, frame.lasers, skin, this.dpr);
-    drawCannon(ctx, skin, layout.cannonX, layout.cannonY, frame.cannon);
+    ctx.save();
+    ctx.translate(layout.cannonX, layout.cannonY);
+    ctx.scale(layout.cannonScale, layout.cannonScale);
+    drawCannon(ctx, skin, 0, 0, frame.cannon);
     if (state) this.drawEmpGauge(state.combo.charge, frame.time);
+    ctx.restore();
     ctx.restore();
 
     this.drawFlash(effects.flash);
@@ -252,18 +272,20 @@ export class Renderer {
     ctx.globalAlpha = 1;
   }
 
-  /** EMP charge as an arc hugging the cannon dome; pulses with a glow when full. */
+  /**
+   * EMP charge as an arc hugging the cannon dome (in the cannon's own coordinates); pulses
+   * with a glow when full.
+   */
   private drawEmpGauge(charge: number, time: number): void {
-    const { ctx, layout } = this;
+    const { ctx } = this;
     const r = LAYOUT.baseRadius + 7;
-    const { cannonX: cx, cannonY: cy } = layout;
 
     ctx.save();
     ctx.lineCap = 'round';
     ctx.lineWidth = 3;
     ctx.strokeStyle = GAUGE_TRACK;
     ctx.beginPath();
-    ctx.arc(cx, cy, r, Math.PI, TAU);
+    ctx.arc(0, 0, r, Math.PI, TAU);
     ctx.stroke();
 
     if (charge > 0) {
@@ -273,7 +295,7 @@ export class Renderer {
         ctx.shadowBlur = (8 + 6 * Math.sin(time * 6)) * this.dpr;
       }
       ctx.beginPath();
-      ctx.arc(cx, cy, r, Math.PI, Math.PI + Math.PI * Math.min(1, charge));
+      ctx.arc(0, 0, r, Math.PI, Math.PI + Math.PI * Math.min(1, charge));
       ctx.stroke();
     }
     ctx.restore();

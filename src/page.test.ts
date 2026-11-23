@@ -39,6 +39,15 @@ describe('index.html metadata', () => {
     expect(meta('name', 'theme-color')?.toLowerCase()).toBe(PALETTE.bg.toLowerCase());
   });
 
+  it('lets the app place itself around the on-screen keyboard and the notch', () => {
+    const viewport = meta('name', 'viewport') ?? '';
+    for (const setting of ['width=device-width', 'initial-scale=1.0', 'viewport-fit=cover', 'interactive-widget=resizes-visual']) {
+      expect(viewport).toContain(setting);
+    }
+    // Zoom stays allowed (accessibility).
+    expect(viewport).not.toMatch(/user-scalable|maximum-scale/);
+  });
+
   it('links icons that exist in public/', () => {
     expect(html).toContain('<link rel="icon" href="/favicon.svg" type="image/svg+xml" />');
     expect(html).toContain('<link rel="apple-touch-icon" href="/apple-touch-icon.png" />');

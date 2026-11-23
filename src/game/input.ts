@@ -4,6 +4,10 @@ import type { TypingOptions } from './types.ts';
 const COMBINING_MARKS = /\p{M}/gu;
 const SINGLE_LETTER = /^\p{L}$/u;
 
+export function isLetter(char: string): boolean {
+  return SINGLE_LETTER.test(char);
+}
+
 /** Removes diacritics: `ação` → `acao`, `maçã` → `maca`. */
 export function stripAccents(text: string): string {
   return text.normalize('NFD').replace(COMBINING_MARKS, '').normalize('NFC');
@@ -63,11 +67,14 @@ export function keyToAction(event: KeyLike): InputAction | null {
   }
 
   const key = event.key.normalize('NFC');
-  if (!SINGLE_LETTER.test(key)) return null;
+  if (!isLetter(key)) return null;
   return { type: 'char', char: key.toLowerCase() };
 }
 
-/** Collects key presses as actions; the game drains them once per fixed update. */
+/**
+ * Collects key presses (and actions from the touch controls) in order; the game drains them
+ * once per fixed update.
+ */
 export class KeyboardInput {
   private readonly queue: InputAction[] = [];
   private target: Window | null = null;
@@ -82,6 +89,10 @@ export class KeyboardInput {
     this.target?.removeEventListener('keydown', this.onKeyDown);
     this.target = null;
     this.queue.length = 0;
+  }
+
+  push(action: InputAction): void {
+    this.queue.push(action);
   }
 
   drain(handler: (action: InputAction) => void): void {

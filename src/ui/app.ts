@@ -1,6 +1,7 @@
 // Screen switching: menu ↔ settings ↔ shop ↔ progress ↔ ranking ↔ match (HUD, pause, Mission
 // Report). Owns the persisted settings, the economy and the online account, and applies them
 // (volume, effects, language, equipped cosmetics, nickname, login streak, ranking submissions).
+// On phones it also owns the on-screen keyboard (typing field) and the room it leaves.
 import type { AudioEngine } from '../audio/AudioEngine.ts';
 import type { SoundName } from '../audio/types.ts';
 import { resolveCosmetics } from '../cosmetics/equip.ts';
@@ -14,6 +15,7 @@ import type { MatchOutcome } from '../economy/types.ts';
 import type { AuthService, LinkOutcome } from '../firebase/auth.ts';
 import { isRankedMode, type Leaderboard, type MatchResult, type SubmitResult, type Submitter } from '../firebase/leaderboard.ts';
 import { Game, type GameView, type MatchConfig } from '../game/Game.ts';
+import { isCompact } from '../game/render/layout.ts';
 import { buildReport, type MatchReport } from '../game/report.ts';
 import type { MatchState } from '../game/state.ts';
 import { MODES } from '../modes/index.ts';
@@ -37,6 +39,9 @@ import { ReportScreen, type RankingLine } from './report.ts';
 import { SettingsScreen } from './settings.ts';
 import { ShopScreen } from './shop.ts';
 import { Toasts } from './toast.ts';
+import { TouchMode } from './touch.ts';
+import { TypingField } from './typingField.ts';
+import { ViewportWatcher, type ViewportListener } from './viewport.ts';
 
 export interface AppOptions {
   readonly root: HTMLElement;
@@ -59,6 +64,10 @@ type Screen = 'menu' | 'settings' | 'shop' | 'progress' | 'ranking' | 'match';
 
 /** The Mission Report's fanfare waits for the game over notes (ms). */
 const FANFARE_DELAY = 1000;
+/** Time for the on-screen keyboard to come up, or for the previous one to finish closing (ms). */
+const KEYBOARD_GRACE = 1200;
+/** Less height than this above the keyboard is not playable: a phone lying on its side (px). */
+const MIN_PLAY_HEIGHT = 240;
 
 /** Something to tell the player, never over a running match. */
 interface Notice {
@@ -87,11 +96,19 @@ interface FinishedMatch {
 }
 
 export class App {
+  private readonly root: HTMLElement;
   private readonly store: KeyValueStore | null;
   private readonly audio: AudioEngine;
   private readonly seed: string | null;
   private readonly canvas: HTMLCanvasElement;
   private readonly layer: HTMLElement;
+  private readonly touch = new TouchMode(() => this.applyTouch());
+  private readonly field: TypingField;
+  private readonly viewport: ViewportWatcher;
+  /** Until then (performance.now), the keyboard may still be on its way up or down. */
+  private keyboardGrace = 0;
+  /** This match is being typed without an on-screen keyboard (a physical one). */
+  private physicalKeyboard = false;
   private readonly gameInstance: Game;
   private readonly economyInstance: Economy;
   private readonly authService: AuthService;
@@ -114,6 +131,7 @@ export class App {
   private finished: FinishedMatch | null = null;
 
   constructor(options: AppOptions) {
+    this.root = options.root;
     this.store = options.store;
     this.audio = options.audio;
     this.seed = options.seed;
@@ -130,7 +148,14 @@ export class App {
     this.canvas = el('canvas', 'game-canvas');
     this.canvas.setAttribute('role', 'img');
     this.layer = el('div', 'ui');
-    options.root.replaceChildren(this.canvas, this.layer);
+    this.field = new TypingField((action) => this.gameInstance.send(action));
+    this.viewport = new ViewportWatcher(this.root, this.onViewport);
+    this.root.replaceChildren(this.canvas, this.field.root, this.layer);
+    // Tapping the field opens the keyboard; a tap never takes the focus away from it.
+    this.canvas.addEventListener('mousedown', (event) => event.preventDefault());
+    this.canvas.addEventListener('click', () => {
+      if (this.playing) this.openKeyboard();
+    });
 
     this.gameInstance = new Game(this.canvas, this.view, this.audio);
     this.economyInstance = new Economy(options.inventory);
@@ -200,6 +225,9 @@ export class App {
   }
 
   start(): void {
+    this.touch.attach();
+    this.applyTouch();
+    this.viewport.attach();
     this.gameInstance.start();
     this.show('menu');
     this.onAccountChange();
@@ -207,11 +235,51 @@ export class App {
     void this.authService.start();
   }
 
+  // ---------- Touch: on-screen keyboard and the room it leaves ----------
+
+  private get playing(): boolean {
+    return this.screen === 'match' && this.gameInstance.state?.status === 'playing';
+  }
+
+  private applyTouch(): void {
+    this.root.classList.toggle('is-touch', this.touch.active);
+    this.screens.hud.setTouch(this.touch.active);
+  }
+
+  /**
+   * Straight from a tap (browsers only open the keyboard there), before the match starts or
+   * resumes: its first HUD update must know the keyboard is on its way. Nothing with a mouse.
+   */
+  private openKeyboard(): void {
+    if (!this.touch.active || (this.field.focused && this.viewport.state.keyboard)) return;
+    this.keyboardGrace = performance.now() + KEYBOARD_GRACE;
+    this.field.focus();
+  }
+
+  private readonly onViewport: ViewportListener = (state, previous) => {
+    const { width, height } = this.root.getBoundingClientRect();
+    this.root.classList.toggle('is-compact', isCompact(width, height));
+    // The player closed the keyboard in the middle of the match: pause, like leaving the tab.
+    const closed = previous.keyboard && !state.keyboard;
+    if (closed && this.playing && performance.now() >= this.keyboardGrace) this.gameInstance.togglePause();
+  };
+
+  /** What a touch player has to do before typing, null when nothing. */
+  private tapHint(state: Readonly<MatchState>): string | null {
+    if (!this.touch.active || state.status !== 'playing') return null;
+    if (this.viewport.state.keyboard) {
+      return this.root.clientHeight < MIN_PLAY_HEIGHT ? this.t('rotateHint') : null;
+    }
+    if (this.physicalKeyboard || performance.now() < this.keyboardGrace) return null;
+    return this.t('tapToType');
+  }
+
   // ---------- Game → UI ----------
 
   private readonly view: GameView = {
     onMatchStart: () => {
       this.matchSerial++;
+      this.physicalKeyboard = false;
       this.finished = null;
       this.screens.hud.reset();
       this.screens.report.hide();
@@ -219,13 +287,19 @@ export class App {
       this.reportShown = false;
     },
     sync: (state) => this.syncMatch(state),
-    onEvents: (events) => this.screens.hud.onEvents(events),
+    onEvents: (events) => {
+      this.screens.hud.onEvents(events);
+      const typed = events.some(({ type }) => type === 'hit' || type === 'bossHit' || type === 'miss');
+      if (typed && !this.viewport.state.keyboard) this.physicalKeyboard = true;
+    },
     onExitRequest: () => this.toMenu(),
   };
 
   private syncMatch(state: Readonly<MatchState>): void {
     const { hud, pause, report } = this.screens;
     hud.update(state);
+    hud.setTapHint(this.tapHint(state));
+    if (state.status !== 'playing') this.field.blur();
     pause.setVisible(state.status === 'paused');
     if (state.status === 'gameover') {
       if (!this.reportShown) {
@@ -513,8 +587,15 @@ export class App {
       requireAccents: s.requireAccents,
       reduceEffects: s.reduceEffects,
     };
+    this.openKeyboard();
     this.gameInstance.startMatch(config);
   }
+
+  /** "Reiniciar", "Jogar de novo". */
+  private readonly restartMatch = (): void => {
+    this.openKeyboard();
+    this.gameInstance.restart();
+  };
 
   private toMenu(): void {
     this.gameInstance.stopMatch();
@@ -559,6 +640,7 @@ export class App {
     this.t = t;
     this.formatScore = formatScore;
     this.canvas.setAttribute('aria-label', t('canvasLabel'));
+    this.field.setLabel(t('typingField'));
 
     const accountCallbacks: AccountCallbacks = {
       onSignIn: this.signIn,
@@ -569,14 +651,22 @@ export class App {
     const rankingAccount = new AccountBadge(t, accountCallbacks);
 
     const screens: Screens = {
-      hud: new Hud(t, formatScore),
+      hud: new Hud(t, formatScore, {
+        onPause: () => {
+          if (this.playing) this.gameInstance.togglePause();
+        },
+        onEmp: () => this.gameInstance.send({ type: 'emp' }),
+      }),
       pause: new PauseScreen(t, {
-        onResume: () => this.gameInstance.togglePause(),
-        onRestart: () => this.gameInstance.restart(),
+        onResume: () => {
+          this.openKeyboard();
+          this.gameInstance.togglePause();
+        },
+        onRestart: this.restartMatch,
         onQuit: () => this.gameInstance.quit(),
       }),
       report: new ReportScreen(t, this.settings.language, formatScore, {
-        onPlayAgain: () => this.gameInstance.restart(),
+        onPlayAgain: this.restartMatch,
         onMenu: () => this.toMenu(),
         onSignIn: this.signIn,
       }),
@@ -661,6 +751,7 @@ export class App {
     this.screens.progress.setVisible(false);
     this.screens.ranking.setVisible(false);
     this.screens = this.buildScreens();
+    this.applyTouch();
     this.refreshAccount();
     this.show(this.screen);
     if (this.screen === 'menu') this.screens.menu.focusGroup('language');

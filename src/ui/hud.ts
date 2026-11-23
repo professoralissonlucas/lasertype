@@ -1,6 +1,7 @@
 // Match HUD: shield (HP), EMP charge, score, combo/multiplier, wave, time, kills,
 // accuracy, WPM, ice slow, wave banner, boss (health bar and entrance alert) and combat log.
-// Only touches the DOM when a displayed value actually changed.
+// On phones (.is-compact) it is a single strip; with touch (.is-touch) it has the pause and
+// EMP buttons. Only touches the DOM when a displayed value actually changed.
 import { isEmpReady } from '../game/combo.ts';
 import { bossHealth } from '../game/entities/Boss.ts';
 import { accuracyOf, comboMultiplier, wordsPerMinute } from '../game/scoring.ts';
@@ -20,6 +21,22 @@ function stat(text: string): { row: HTMLElement; label: HTMLElement; value: HTML
   return { row, label, value };
 }
 
+export interface HudCallbacks {
+  onPause(): void;
+  onEmp(): void;
+}
+
+/** A button over the field. It never takes the focus: that would close the on-screen keyboard. */
+function touchButton(className: string, label: string, onPress: () => void): HTMLButtonElement {
+  const node = el('button', `hud__button ${className}`);
+  node.type = 'button';
+  node.tabIndex = -1;
+  node.setAttribute('aria-label', label);
+  node.addEventListener('mousedown', (event) => event.preventDefault());
+  node.addEventListener('click', onPress);
+  return node;
+}
+
 export class Hud {
   readonly root: HTMLElement;
   private readonly t: Translate;
@@ -32,6 +49,10 @@ export class Hud {
   private readonly chargeGroup: HTMLElement;
   private readonly chargeFill: HTMLElement;
   private readonly chargeLabel: HTMLElement;
+  private readonly empButton: HTMLButtonElement;
+  private readonly info: HTMLElement;
+  private readonly tapHint: HTMLElement;
+  private touch = false;
   private readonly scoreValue: HTMLElement;
   private readonly comboValue: HTMLElement;
   private readonly multiplierValue: HTMLElement;
@@ -49,7 +70,7 @@ export class Hud {
   /** Last rendered strings/numbers, to skip unchanged DOM writes. */
   private readonly last = new Map<string, string | number | boolean>();
 
-  constructor(t: Translate, formatScore: (value: number) => string) {
+  constructor(t: Translate, formatScore: (value: number) => string, callbacks: HudCallbacks) {
     this.t = t;
     this.formatScore = formatScore;
     this.root = el('div', 'hud');
@@ -67,7 +88,9 @@ export class Hud {
     bar.append(this.chargeFill);
     this.chargeLabel = el('span', 'hud__label', t('charge'));
     this.chargeGroup.append(this.chargeLabel, bar);
-    left.append(this.shieldGroup, this.chargeGroup);
+    // Phones: the wave (or the time left), since the stats panel does not fit.
+    this.info = el('div', 'hud__info');
+    left.append(this.shieldGroup, this.info, this.chargeGroup);
 
     // Center: score, combo and multiplier.
     const center = el('div', 'hud__center');
@@ -115,11 +138,43 @@ export class Hud {
     this.banner = el('div', 'hud__banner');
     this.banner.setAttribute('aria-live', 'polite');
 
-    this.root.append(left, center, right, this.banner, this.alert, el('div', 'hud__hint', t('controlsHint')));
+    // Touch controls.
+    const pause = touchButton('hud__pause', t('pause'), () => callbacks.onPause());
+    pause.append(el('span', 'hud__pause-icon'));
+    this.empButton = touchButton('hud__emp', t('empButton'), () => callbacks.onEmp());
+    this.empButton.append(el('span', 'hud__emp-label', t('causeEmp')));
+    this.tapHint = el('div', 'hud__tap');
+    this.tapHint.setAttribute('role', 'status');
+    this.tapHint.hidden = true;
+
+    this.root.append(
+      left,
+      center,
+      right,
+      this.banner,
+      this.alert,
+      this.tapHint,
+      pause,
+      this.empButton,
+      el('div', 'hud__hint', t('controlsHint')),
+    );
   }
 
   setVisible(visible: boolean): void {
     this.root.hidden = !visible;
+  }
+
+  /** Touch players fire the EMP with its button, not with the space bar. */
+  setTouch(touch: boolean): void {
+    this.touch = touch;
+    this.last.delete('charge');
+  }
+
+  /** What a touch player has to do before typing (open the keyboard…); null hides it. */
+  setTapHint(text: string | null): void {
+    if (!this.changed('tapHint', text ?? '')) return;
+    this.tapHint.textContent = text ?? '';
+    this.tapHint.hidden = text === null;
   }
 
   /** New match: clear the combat log and every cached value. */
@@ -159,7 +214,10 @@ export class Hud {
       this.chargeFill.style.transform = `scaleX(${charge})`;
       const ready = isEmpReady(charge);
       this.chargeGroup.classList.toggle('is-ready', ready);
-      this.chargeLabel.textContent = t(ready ? 'chargeReady' : 'charge');
+      this.chargeLabel.textContent = t(!ready ? 'charge' : this.touch ? 'chargeReadyTouch' : 'chargeReady');
+      this.empButton.style.setProperty('--charge', String(charge));
+      this.empButton.classList.toggle('is-ready', ready);
+      this.empButton.setAttribute('aria-disabled', String(!ready));
     }
 
     if (this.changed('score', state.score)) this.scoreValue.textContent = this.formatScore(state.score);
@@ -190,6 +248,11 @@ export class Hud {
     if (this.changed('time', time)) {
       this.values.time.textContent = time;
       this.values.time.classList.toggle('is-low', remaining !== null && remaining <= 10);
+    }
+    const info = remaining === null ? t('waveBanner', { n: Math.max(1, state.wave) }) : time;
+    if (this.changed('info', info)) {
+      this.info.textContent = info;
+      this.info.classList.toggle('is-low', remaining !== null && remaining <= 10);
     }
 
     if (this.changed('kills', state.stats.destroyed)) this.values.kills.textContent = String(state.stats.destroyed);

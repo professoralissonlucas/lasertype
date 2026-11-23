@@ -168,7 +168,9 @@ export class MenuScreen {
       callbacks.onPlay(this.choice);
     });
 
-    this.root.append(account, this.wallet, header, form);
+    const top = el('div', 'menu__top');
+    top.append(account, this.wallet);
+    this.root.append(top, header, form);
     if (recaptchaNotice) this.root.append(recaptchaCredit(t));
   }
 

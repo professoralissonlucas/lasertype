@@ -11,17 +11,32 @@ body {
   margin: 0;
   height: 100%;
   overflow: hidden;
+  overscroll-behavior: none;
 }
 
 body {
   background: var(--bg);
   color: var(--text);
   font-family: var(--font-display);
+  /* Phones: no double-tap zoom (taps act at once), no text inflation, no tap flash. */
+  touch-action: manipulation;
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
 }
 
+/* Inside the safe area of the screen (notch, rounded corners, home bar). */
 #app {
   position: fixed;
-  inset: 0;
+  inset: env(safe-area-inset-top, 0px) env(safe-area-inset-right, 0px) env(safe-area-inset-bottom, 0px)
+    env(safe-area-inset-left, 0px);
+}
+
+/* Part of the page is covered (on-screen keyboard): src/ui/viewport.ts says where it fits. */
+#app.is-inset {
+  top: calc(var(--app-top) + env(safe-area-inset-top, 0px));
+  bottom: auto;
+  height: calc(var(--app-height) - env(safe-area-inset-top, 0px));
 }
 
 .game-canvas {
@@ -30,6 +45,28 @@ body {
   display: block;
   width: 100%;
   height: 100%;
+  touch-action: none;
+  user-select: none;
+  -webkit-touch-callout: none;
+}
+
+/* Brings up the on-screen keyboard. At the top, so no browser scrolls the page to show it; 16px
+   keeps iOS from zooming in. */
+.typing-field {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 32px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: transparent;
+  caret-color: transparent;
+  font-size: 16px;
+  opacity: 0;
+  outline: none;
+  pointer-events: none;
 }
 
 /* UI layer over the canvas: only interactive pieces take pointer events. */
@@ -119,16 +156,21 @@ kbd {
   position: absolute;
   inset: 0;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   padding: 16px;
   background: rgb(5 7 15 / 0.72);
 }
 
+/* As tall as its screen at most (which may be what the on-screen keyboard leaves). */
 .panel {
   width: min(560px, 100%);
-  max-height: calc(100vh - 32px);
+  max-height: 100%;
   overflow-y: auto;
-  padding: 28px;
+  overscroll-behavior: contain;
+  --panel-y: 28px;
+  --panel-x: 28px;
+  padding: var(--panel-y) var(--panel-x);
   border: 1px solid rgb(100 116 139 / 0.45);
   border-radius: 8px;
   background: rgb(5 7 15 / 0.97);
@@ -308,6 +350,11 @@ kbd {
   }
 }
 
+/* Account and wallet: in the corners, or in one row on phones. */
+.menu__top {
+  display: contents;
+}
+
 .menu__header {
   text-align: center;
 }
@@ -415,6 +462,7 @@ kbd {
   inset: 0;
   margin: auto;
   height: fit-content;
+  max-height: calc(100% - 32px);
   display: flex;
   flex-direction: column;
   gap: 22px;
@@ -545,6 +593,17 @@ kbd {
 
 .hud__label {
   color: var(--muted);
+}
+
+/* Wave or time left (phones only: elsewhere the stats panel has them). */
+.hud__info {
+  display: none;
+  font-family: var(--font-mono);
+  letter-spacing: 0.06em;
+}
+
+.hud__info.is-low {
+  color: var(--danger);
 }
 
 .hud__value {
@@ -868,6 +927,248 @@ kbd {
   text-transform: none;
 }
 
+/* Touch controls: pause and EMP (with its charge as a ring), and what to do before typing. */
+.hud__button {
+  position: absolute;
+  bottom: 24px;
+  display: none;
+  place-items: center;
+  width: 60px;
+  height: 60px;
+  padding: 0;
+  border: 1px solid var(--muted);
+  border-radius: 50%;
+  background: rgb(5 7 15 / 0.75);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  pointer-events: auto;
+}
+
+.is-touch .hud__button {
+  display: grid;
+}
+
+.hud__button:active {
+  border-color: var(--text);
+}
+
+.hud__pause {
+  left: 24px;
+}
+
+.hud__pause-icon {
+  width: 14px;
+  height: 18px;
+  border-inline: 5px solid currentColor;
+}
+
+.hud__emp {
+  --charge: 0;
+  right: 24px;
+  border: 0;
+  background: conic-gradient(var(--primary) calc(var(--charge) * 360deg), rgb(100 116 139 / 0.35) 0);
+  color: var(--muted);
+}
+
+.hud__emp-label {
+  display: grid;
+  place-items: center;
+  width: calc(100% - 8px);
+  height: calc(100% - 8px);
+  border-radius: 50%;
+  background: var(--bg);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.hud__emp.is-ready {
+  color: var(--primary);
+  box-shadow: 0 0 18px rgb(34 211 238 / 0.6);
+}
+
+.hud__emp.is-ready .hud__emp-label {
+  background: linear-gradient(rgb(34 211 238 / 0.18) 0 0) var(--bg);
+}
+
+.hud__tap {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: max-content;
+  max-width: calc(100% - 32px);
+  padding: 12px 18px;
+  border: 1px solid var(--primary);
+  border-radius: 6px;
+  background: rgb(5 7 15 / 0.9);
+  color: var(--primary);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  text-align: center;
+  text-transform: none;
+  transform: translate(-50%, -50%);
+}
+
+.is-touch .hud__hint,
+.is-touch kbd {
+  display: none;
+}
+
+/* The HUD of a phone: one strip over the field (render/layout.ts → COMPACT.fieldTop). */
+.is-compact .hud {
+  font-size: 11px;
+  letter-spacing: 0.1em;
+}
+
+.is-compact .hud__side,
+.is-compact .hud__hint,
+.is-compact .hud__row .hud__label,
+.is-compact .hud__charge .hud__label {
+  display: none;
+}
+
+.is-compact .hud__panel--left {
+  top: 0;
+  left: 0;
+  right: 0;
+  gap: 6px;
+  width: auto;
+  height: 46px;
+  padding: 7px 10px;
+  border: 0;
+  border-radius: 0;
+  background: rgb(5 7 15 / 0.6);
+}
+
+.is-compact .hud__row {
+  justify-content: flex-start;
+}
+
+.is-compact .hud__pips {
+  gap: 4px;
+}
+
+.is-compact .hud__pip {
+  width: 18px;
+}
+
+.is-compact .hud__info {
+  display: block;
+  line-height: 14px;
+}
+
+/* Modes without damage have no shield: the wave takes its place. */
+.is-compact .hud__row[hidden] + .hud__info {
+  margin-block: auto;
+}
+
+/* The charge is a line under the strip. */
+.is-compact .hud__charge {
+  position: absolute;
+  inset: auto 0 0;
+}
+
+.is-compact .hud__bar {
+  height: 3px;
+  border: 0;
+  border-radius: 0;
+  background: rgb(100 116 139 / 0.35);
+}
+
+.is-compact .hud__center {
+  top: 4px;
+}
+
+.is-compact .hud__score {
+  font-size: 20px;
+}
+
+.is-compact .hud__combo {
+  gap: 6px;
+  margin-top: 2px;
+  line-height: 13px;
+}
+
+.is-compact .hud__value {
+  font-size: 13px;
+}
+
+.is-compact .hud__multiplier {
+  min-width: 2.2em;
+  padding: 0 4px;
+  font-size: 12px;
+}
+
+.is-compact .hud__chip {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  margin-top: 10px;
+  transform: translateX(-50%);
+}
+
+.is-compact .hud__boss {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  width: min(420px, calc(100vw - 24px));
+  margin-top: 8px;
+  transform: translateX(-50%);
+}
+
+.is-compact .hud__boss-pip {
+  height: 6px;
+}
+
+.is-compact .hud__button {
+  bottom: 6px;
+  width: 50px;
+  height: 50px;
+}
+
+.is-compact .hud__emp {
+  right: 10px;
+}
+
+.is-compact .hud__emp-label {
+  font-size: 12px;
+}
+
+.is-compact .hud__pause {
+  top: 0;
+  right: 0;
+  bottom: auto;
+  left: auto;
+  width: 48px;
+  height: 46px;
+  border: 0;
+  border-radius: 0;
+  background: none;
+}
+
+.is-compact .hud__banner {
+  font-size: 28px;
+}
+
+.is-compact .hud__banner[data-tone='good'],
+.is-compact .hud__banner[data-tone='bad'] {
+  font-size: 17px;
+}
+
+.is-compact .hud__alert {
+  top: 38%;
+  padding: 12px 16px;
+}
+
+.is-compact .hud__alert-title {
+  font-size: 24px;
+}
+
+.is-compact .hud__alert-text {
+  font-size: 13px;
+}
+
 /* ---------- Combat log ---------- */
 
 .log__title {
@@ -980,6 +1281,11 @@ kbd {
 }
 
 /* ---------- Mission Report ---------- */
+
+/* Just opened where the on-screen keyboard was (ui/report.ts). */
+.is-touch .overlay--report.is-arming {
+  pointer-events: none;
+}
 
 .report__subtitle {
   margin: -10px 0 20px;
@@ -1164,6 +1470,7 @@ kbd {
   position: absolute;
   inset: 0;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   padding: 16px;
   background: rgb(5 7 15 / 0.55);
@@ -1409,6 +1716,7 @@ kbd {
   position: absolute;
   inset: 0;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   padding: 16px;
   background: rgb(5 7 15 / 0.55);
@@ -1848,9 +2156,9 @@ kbd {
 /* Always in sight, however much the match completed. */
 .report .panel__actions--row {
   position: sticky;
-  bottom: -28px;
-  margin: 0 -28px -28px;
-  padding: 14px 28px 20px;
+  bottom: calc(-1 * var(--panel-y));
+  margin: 0 calc(-1 * var(--panel-x)) calc(-1 * var(--panel-y));
+  padding: 14px var(--panel-x) 20px;
   background: rgb(5 7 15 / 0.97);
 }
 
@@ -1962,6 +2270,7 @@ kbd {
   position: absolute;
   inset: 0;
   display: grid;
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   padding: 16px;
   background: rgb(5 7 15 / 0.55);
@@ -2276,7 +2585,28 @@ kbd {
   box-shadow: none;
 }
 
-/* ---------- Small screens (mobile support is Phase 7) ---------- */
+/* ---------- Touch: targets of at least 44 px ---------- */
+
+.is-touch .btn,
+.is-touch .tabs__tab,
+.is-touch .shop__tab,
+.is-touch .setting--toggle,
+.is-touch .nickname__input,
+.is-touch .choice--segmented .choice__body {
+  min-height: 44px;
+}
+
+.is-touch .setting input[type='range'] {
+  height: 44px;
+  margin: -6px 0;
+}
+
+.is-touch .menu__legal a {
+  display: inline-block;
+  padding: 12px 0;
+}
+
+/* ---------- Small screens (the phone's HUD is .is-compact, above) ---------- */
 
 /* Below 1000 px the field takes the whole width (see LAYOUT.sideReserveMinWidth):
    the side column would cover words, so it hides. */
@@ -2296,101 +2626,185 @@ kbd {
 }
 
 @media (max-width: 720px) {
-  .hud__hint {
-    display: none;
+  .overlay,
+  .shop,
+  .progress,
+  .ranking {
+    padding: 8px;
   }
 
-  .hud__panel--left {
-    width: 150px;
-    padding: 8px 10px;
+  .panel {
+    --panel-y: 18px;
+    --panel-x: 16px;
   }
 
-  .hud__score {
-    font-size: 24px;
+  .panel__title {
+    font-size: 20px;
+    letter-spacing: 0.14em;
   }
 
-  /* Below the shield panel, which reaches the middle here. */
-  .hud__boss {
-    margin-top: 26px;
+  .settings {
+    width: calc(100% - 16px);
+    max-height: calc(100% - 16px);
   }
 
-  .hud__banner[data-tone='good'],
-  .hud__banner[data-tone='bad'] {
-    font-size: 18px;
+  /* The way back stays in sight, however long the list. */
+  .panel__footer {
+    position: sticky;
+    bottom: calc(-1 * var(--panel-y));
+    z-index: 2;
+    margin: 8px calc(-1 * var(--panel-x)) calc(-1 * var(--panel-y));
+    padding: 10px var(--panel-x);
+    border-top: 1px solid rgb(100 116 139 / 0.3);
+    background: var(--bg);
   }
 
-  .hud__alert-title {
-    font-size: 26px;
+  .panel__note {
+    font-size: 11px;
   }
 
-  .menu__row,
+  .tabs__tab,
+  .shop__tab {
+    flex: 1;
+    padding: 10px 4px;
+    letter-spacing: 0.06em;
+  }
+
+  /* Menu */
+  .menu {
+    gap: 14px;
+    padding: 10px 12px 16px;
+  }
+
+  .menu__top {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    width: 100%;
+  }
+
+  .menu__wallet,
+  .menu__account,
+  .menu__legal {
+    position: static;
+  }
+
+  .account {
+    gap: 8px;
+    padding: 3px 3px 3px 10px;
+    letter-spacing: 0.04em;
+  }
+
+  .account__action {
+    padding-inline: 10px;
+    letter-spacing: 0.06em;
+  }
+
+  .menu__legal {
+    text-align: center;
+  }
+
+  .menu__title {
+    font-size: 34px;
+    letter-spacing: 0.16em;
+    text-indent: 0.16em;
+  }
+
+  .menu__tagline {
+    margin-top: 4px;
+    font-size: 12px;
+    letter-spacing: 0.04em;
+  }
+
+  .menu__progress {
+    gap: 4px 10px;
+    margin-top: 8px;
+    font-size: 11px;
+    letter-spacing: 0.06em;
+  }
+
+  .menu__progress .bar {
+    width: 90px;
+  }
+
+  .menu__form {
+    gap: 12px;
+  }
+
+  .menu__row {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .menu__actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    margin-top: 4px;
+  }
+
+  .menu__actions .btn {
+    padding-inline: 8px;
+    letter-spacing: 0.08em;
+  }
+
+  .menu__actions .btn--large {
+    grid-column: 1 / -1;
+  }
+
+  .choice__legend {
+    margin-bottom: 6px;
+    font-size: 11px;
+  }
+
+  .choice__label {
+    letter-spacing: 0.08em;
+  }
+
+  .choice--cards .choice__items {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .choice--cards .choice__body {
+    gap: 4px;
+    min-height: 0;
+    padding: 10px 12px;
+  }
+
+  .choice--cards .choice__label {
+    font-size: 14px;
+  }
+
+  .choice__desc,
+  .choice__note {
+    font-size: 11px;
+  }
+
+  /* Mission Report */
+  .report__subtitle {
+    margin: -14px 0 14px;
+  }
+
+  .report__summary {
+    margin-bottom: 16px;
+  }
+
+  .report__grade-value {
+    width: 72px;
+    height: 72px;
+    font-size: 46px;
+  }
+
   .report__stats {
     grid-template-columns: 1fr;
   }
 
-  .menu__wallet {
-    position: static;
-    align-self: center;
-  }
-
-  .menu__account {
-    position: static;
-    align-self: center;
-  }
-
-  .menu__legal {
-    position: static;
-    text-align: center;
-  }
-
-  .streak {
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-  }
-
-  .progress__panel {
-    padding: 20px 16px;
-  }
-
-  .progress__row-value {
-    min-width: 0;
-    text-align: left;
-  }
-
-  /* Both buttons on one line (the shortcuts mean little without a keyboard). */
-  .report .panel__actions--row {
-    flex-wrap: nowrap;
-  }
-
-  .report .panel__actions--row .btn {
+  .report__coins {
+    margin-bottom: 18px;
     padding: 10px 12px;
-    font-size: 12px;
-    white-space: nowrap;
-  }
-
-  .report kbd {
-    display: none;
-  }
-
-  .tabs__tab {
-    padding: 10px;
-    letter-spacing: 0.08em;
-  }
-
-  .ranking__filters {
-    grid-template-columns: 1fr;
-  }
-
-  .ranking__table .col-acc {
-    display: none;
-  }
-
-  .shop__offers,
-  .shop__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .shop__canvas {
-    height: 190px;
   }
 
   .report__coins-info {
@@ -2398,12 +2812,125 @@ kbd {
     text-align: left;
   }
 
-  .choice--cards .choice__items {
-    flex-direction: column;
+  /* Both buttons on one line. */
+  .report .panel__actions--row {
+    flex-wrap: nowrap;
+    padding: 10px var(--panel-x);
+    background: var(--bg);
   }
 
-  .choice--cards .choice__body {
+  .report .panel__actions--row .btn {
+    flex: 1;
+    padding: 10px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+  }
+
+  .report .panel__actions--row kbd {
+    display: none;
+  }
+
+  /* Progress */
+  .streak {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+
+  .progress__row-value {
+    min-width: 0;
+    text-align: left;
+  }
+
+  /* Ranking */
+  .ranking__filters {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .ranking__table .col-acc {
+    display: none;
+  }
+
+  .ranking__table th,
+  .ranking__table td {
+    padding-inline: 6px;
+  }
+
+  /* Shop: the preview and the buy button stay in sight while the items scroll under them. */
+  .shop__panel {
+    gap: 12px;
+  }
+
+  .shop__offers,
+  .shop__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .item-card {
+    padding: 12px;
+  }
+
+  .item-card--compact {
+    min-height: 64px;
+    padding: 10px;
+  }
+
+  .shop__detail {
+    position: sticky;
+    top: calc(-1 * var(--panel-y));
+    z-index: 1;
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr);
+    align-items: center;
+    gap: 6px 12px;
+    margin-inline: calc(-1 * var(--panel-x));
+    padding: 8px var(--panel-x);
+    border-bottom: 1px solid rgb(100 116 139 / 0.3);
+    background: var(--bg);
+  }
+
+  .shop__stage,
+  .shop__detail-meta,
+  .shop__action,
+  .shop__status {
+    grid-column: 1 / -1;
+  }
+
+  .shop__canvas {
+    height: 132px;
+  }
+
+  .shop__detail-meta {
+    margin: 0;
+    font-size: 10px;
+    letter-spacing: 0.1em;
+  }
+
+  .shop__detail-name {
+    font-size: 17px;
+    letter-spacing: 0.06em;
+  }
+
+  .shop__detail-price {
+    font-size: 11px;
+    letter-spacing: 0.04em;
+    text-align: right;
+  }
+
+  .shop__detail-price .price {
+    justify-content: flex-end;
+    gap: 4px 8px;
+    font-size: 16px;
+  }
+
+  .shop__status {
     min-height: 0;
+  }
+
+  /* Over the top: the bottom has the buttons. */
+  .toasts {
+    top: 10px;
+    bottom: auto;
+    width: calc(100% - 24px);
   }
 }
 

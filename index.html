@@ -2,7 +2,12 @@
 <html lang="pt-BR">
   <head>
     <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- resizes-visual: the on-screen keyboard covers the page instead of shrinking it, and
+         src/ui/viewport.ts moves the app into what is left (the same on every phone). -->
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-visual"
+    />
     <title>Laser Type — jogo de digitação arcade</title>
     <meta
       name="description"

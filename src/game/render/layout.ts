@@ -1,4 +1,6 @@
 // Maps normalized field coordinates to screen (CSS pixel) coordinates. Pure.
+// Words fall in field heights per second, so whatever the screen does here (phone, keyboard
+// up) they take the same time to reach the perimeter: only their speed in pixels changes.
 import { clamp } from '../../utils/math.ts';
 
 export const LAYOUT = {
@@ -28,32 +30,66 @@ export const LAYOUT = {
   baseRadius: 30,
 } as const;
 
+/**
+ * Phones: a narrow screen, or a short one (the height left by the on-screen keyboard counts).
+ * Everything around the field shrinks, so a 440 px tall area still has a 318 px field.
+ */
+export const COMPACT = {
+  maxWidth: 720,
+  maxHeight: 480,
+  sidePadding: 8,
+  fieldTop: 60,
+  perimeterOffset: 62,
+  cannonOffset: 15,
+  /** The whole cannon, the same for every model. */
+  cannonScale: 0.72,
+  /** Word font size: the smaller of these fractions of the width and height, clamped. */
+  fontWidthScale: 0.044,
+  fontHeightScale: 0.036,
+  fontMin: 14,
+  fontMax: 22,
+} as const;
+
 export interface Layout {
   readonly width: number;
   readonly height: number;
+  readonly compact: boolean;
   readonly fieldLeft: number;
   readonly fieldWidth: number;
   readonly fieldTop: number;
   readonly perimeterY: number;
   readonly cannonX: number;
   readonly cannonY: number;
+  /** Size of the cannon (1 = LAYOUT's barrel and base). */
+  readonly cannonScale: number;
   readonly fontSize: number;
 }
 
+export function isCompact(width: number, height: number): boolean {
+  return width <= COMPACT.maxWidth || height <= COMPACT.maxHeight;
+}
+
 export function computeLayout(width: number, height: number): Layout {
-  const side = width >= LAYOUT.sideReserveMinWidth ? LAYOUT.sideReserve : LAYOUT.sidePadding;
+  const compact = isCompact(width, height);
+  const sizes = compact ? COMPACT : LAYOUT;
+  const { fieldTop } = sizes;
+  const side = !compact && width >= LAYOUT.sideReserveMinWidth ? LAYOUT.sideReserve : sizes.sidePadding;
   const fieldWidth = Math.max(1, Math.min(width - side * 2, LAYOUT.maxFieldWidth));
-  const fieldTop = LAYOUT.fieldTop;
+  const font = compact
+    ? Math.min(width * COMPACT.fontWidthScale, height * COMPACT.fontHeightScale)
+    : height * LAYOUT.fontScale;
   return {
     width,
     height,
+    compact,
     fieldLeft: (width - fieldWidth) / 2,
     fieldWidth,
     fieldTop,
-    perimeterY: Math.max(height - LAYOUT.perimeterOffset, fieldTop + 1),
+    perimeterY: Math.max(height - sizes.perimeterOffset, fieldTop + 1),
     cannonX: width / 2,
-    cannonY: height - LAYOUT.cannonOffset,
-    fontSize: Math.round(clamp(height * LAYOUT.fontScale, LAYOUT.fontMin, LAYOUT.fontMax)),
+    cannonY: height - sizes.cannonOffset,
+    cannonScale: compact ? COMPACT.cannonScale : 1,
+    fontSize: Math.round(clamp(font, sizes.fontMin, sizes.fontMax)),
   };
 }
 
@@ -87,8 +123,9 @@ export function letterCenterX(
 
 /** Tip of the barrel for a given angle. */
 export function muzzlePosition(layout: Layout, angle: number): { x: number; y: number } {
+  const length = LAYOUT.barrelLength * layout.cannonScale;
   return {
-    x: layout.cannonX + Math.sin(angle) * LAYOUT.barrelLength,
-    y: layout.cannonY - Math.cos(angle) * LAYOUT.barrelLength,
+    x: layout.cannonX + Math.sin(angle) * length,
+    y: layout.cannonY - Math.cos(angle) * length,
   };
 }

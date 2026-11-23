@@ -69,6 +69,7 @@ src/
     testing/typist.ts     # digitador simulado dos testes de balanceamento (o jogo não importa)
     targeting.ts          # lógica de mira/travamento
     input.ts              # captura de teclado, normalização de acentos
+    touchInput.ts         # teclado virtual (puro): a letra sai da mudança de texto do campo invisível
     scoring.ts            # pontuação, combo, nota final
     entities/             # Word, Boss, Cannon, Laser, Particle
     effects/              # partículas, screen shake, flash
@@ -109,7 +110,8 @@ src/
     nickname.ts           # apelido do ranking (validação, padrão "Piloto" + 4 dígitos)
   ui/                     # app.ts (troca de telas) + telas: menu, hud, combatLog, pause, report, settings, shop
                           # (+ shopPreview, shopModel, previewScript), progress (+ progressText: textos puros), ranking,
-                          # account (selo), nicknameDialog, toast
+                          # account (selo), nicknameDialog, toast; celular: touch (toque ou mouse), typingField (campo
+                          # invisível), viewport (o que o teclado virtual deixa visível)
   audio/                  # receitas de som (dados), planejamento puro e AudioEngine (Web Audio)
   utils/                  # rng com seed, math, pool, storage, day (dia de jogo: dayIndex/dayKey), id (ids aleatórios)
   styles/
@@ -155,6 +157,14 @@ firestore.rules           # CONTRATO do backend (ver §9)
 - Com alvo travado: letra certa = tiro + letra acesa; letra errada = erro (zera combo, mantém o alvo).
 - `Backspace` destrava o alvo (e zera o progresso daquela palavra). `Esc` pausa/retoma (com a partida pausada, `Enter` encerra). `Tab` reinicia. `Espaço` ativa o EMP (só com a barra cheia).
 - Trocar de aba pausa a partida automaticamente.
+
+### Celular e toque
+- **Teclado virtual:** tocar no jogo, em Jogar, Continuar, Reiniciar ou Jogar de novo dá foco a um campo invisível (`ui/typingField.ts`), que abre o teclado. O foco precisa sair **direto do toque** (regra do iOS/Android). Só com toque (`TouchMode`: ponteiro principal do aparelho, depois o último usado); com mouse nada muda.
+- **Letras:** os teclados virtuais costumam mandar teclas sem letra (`Unidentified`), então `editAction` compara o texto do campo antes e depois. **Uma edição vale no máximo uma letra**: sugestão, deslizar, ditado e colar são ignorados (inflariam o WPM do ranking); correção do que já foi digitado também. Apagar = Backspace; espaço sozinho = EMP. O campo fica com `IDLE_TEXT` (para o Backspace ter o que apagar) e só é limpo fora de uma composição.
+- Tecla física continua no `keydown` da janela, que cancela a edição do campo: nunca conta em dobro.
+- **Fechar o teclado no meio da partida pausa**, como trocar de aba (só na passagem aberto → fechado, fora de 1,2 s depois de um foco). Pausa e fim de partida tiram o foco (fecham o teclado). Teclado que não abriu: aviso "Toque na tela para digitar" (some com teclado físico). Menos de 240 px visíveis: "gire o celular".
+- **Velocidade igual em qualquer tela** (decisão): as palavras caem em alturas de campo por segundo (13,3 s para uma fácil na onda 1), então só a velocidade em pixels acompanha a altura (~43 px/s no desktop, ~24 no celular com teclado). Não deixar mais lento em tela pequena: quebraria o Diário idêntico para todos e daria vantagem a quem encolhesse a janela. `layout.test.ts` trava isso (as regras não conhecem a tela). Abrir ou fechar o teclado mantém cada palavra no mesmo ponto da queda.
+- Botões de toque: pausa e EMP (anel = carga). Nunca pegam o foco (`mousedown` cancelado), senão o teclado fecharia. O relatório ignora toques nos primeiros 0,7 s: ele abre onde estava o teclado.
 
 ### Sistemas
 - **Combo:** cada palavra destruída digitando, sem nenhum erro enquanto estava travada, +1. Qualquer tecla errada (inclusive sem alvo) zera. Dano no escudo **não** zera. Multiplicador: 1x (0–4), 2x (5–14), 3x (15–29), 4x (30+). Lógica pura em `game/combo.ts` (reducer) e `game/scoring.ts`.
@@ -229,12 +239,19 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
 
 ### Canhão (`render/drawCannon.ts` + `render/cannon/`)
 - Desenhado em camadas, em Canvas 2D vetorial: plataforma → anel de energia → cano(s) → torre → núcleo de energia → efeitos da boca. Coordenadas locais ao pivô; a luz vem sempre de cima à esquerda (as partes que giram montam o caminho girado e preenchem com gradiente do mundo). Gradientes em cache por `Skin`; brilhos são sprites com `'lighter'`, sem `shadowBlur`. Custo medido: ~0,06–0,09 ms por quadro.
-- **Mesmo tamanho para todos:** 60 px de largura (±`LAYOUT.baseRadius`) e a boca do cano a `LAYOUT.barrelLength` (52 px) do pivô, onde o laser nasce (o Gêmeo com os dois canos a ±4,5 px). A base desce até 16 px abaixo do pivô. `drawCannon.test.ts` desenha num contexto falso e confere a área, a boca, o recuo e que o contexto volta como estava.
+- **Mesmo tamanho para todos** (em telas compactas, todos a 0,72×: `layout.cannonScale`, aplicado pelo renderer): 60 px de largura (±`LAYOUT.baseRadius`) e a boca do cano a `LAYOUT.barrelLength` (52 px) do pivô, onde o laser nasce (o Gêmeo com os dois canos a ±4,5 px). A base desce até 16 px abaixo do pivô. `drawCannon.test.ts` desenha num contexto falso e confere a área, a boca, o recuo e que o contexto volta como estava.
 - Parâmetros (`CannonParams`): `body` (`armored` | `heavy` | `crystal` | `orbital`), `barrel` (`single` | `twin` | `prism` | `rail`), `hull` (3 tons, escuro → claro), `edge`, `highlight`, `trim`, `opacity` (< 1 = translúcido). O anel e o núcleo usam sempre a cor do laser equipado; num erro de digitação ficam em `--danger`.
 - Identidades: **Sentinela** (padrão) bunker de aço cinza-azulado com torre esférica, rebites, respiros e cano com aletas, cinta e freio de boca; **Gêmeo** base pesada com células de energia (as barras acendem com a energia), cabeça quadrada e dois canos que alternam os tiros (cada um recua sozinho); **Cristal** prismas translúcidos com facetas, reflexos e lascas, o núcleo aparece através da gema; **Halo** torre branca com visor, trilhos com bobinas e linha de energia, e um anel orbital inclinado com 3 nós girando (metade de trás atrás da torre); **Dourado** (conquista) o bunker da Sentinela em ouro polido com o cano de trilhos.
 - Movimento (`entities/Cannon.ts`): giro por mola criticamente amortecida (acelera e assenta sem passar do alvo); no tiro, a mira encaixa no alvo (feixe e cano alinhados), o cano recua e volta com suavização (`recoilKick`), a boca brilha ~0,12 s, com clarão, faíscas e fumaça curta (aleatoriedade por `hashUnit` com o número do tiro: repetível, sem alocar). Parado, as luzes "respiram".
 - **Núcleo de energia:** `coreEnergy(multiplicador, carga do EMP)` vai de 0,2 (brasa) a 0,95; EMP pronto = 1, com ondas saindo do núcleo. Menus: 0,3. A prévia da loja carrega o núcleo conforme a palavra é atirada.
   - Modo daltônico e volume de música ficam para quando houver música/cosméticos de cor.
+
+### Layout compacto (celular)
+- `isCompact(largura, altura)` em `render/layout.ts`: largura ≤ 720 **ou** altura ≤ 480, contando só o que o teclado deixa visível. É a única fonte: o canvas usa `COMPACT`/`BOSS_COMPACT` e o `App` põe `.is-compact` no `#app` para o HUD. Outras classes do `#app`: `.is-touch` (botões de toque, alvos ≥ 44 px, sem dicas de tecla) e `.is-inset` (parte da página coberta).
+- HUD em uma faixa de 46 px: escudo + onda (ou tempo restante), pontos + combo, pausa; a carga do EMP é a linha sob a faixa. Em 360×440 (celular com teclado) o campo tem 318 px.
+- `ui/viewport.ts`: o `#app` ocupa a área segura (`viewport-fit=cover` + `env(safe-area-inset-*)`) e, com algo cobrindo a página, o retângulo do `visualViewport` (`--app-top`, `--app-height`). Pinça de zoom não move o app. `interactive-widget=resizes-visual` deixa o Chrome igual ao iOS.
+- O canvas pode mudar de tamanho sem `resize` da janela: o renderer observa e redimensiona no **próximo quadro** (fazer isso no observador mostraria um quadro apagado).
+- Painéis (`.panel`) têm no máximo a altura da sua tela (linhas `minmax(0, 1fr)`), nunca `100vh`. Até 720 px o rodapé com "Voltar" e, na loja, a prévia + Comprar ficam fixos e opacos; avisos no topo.
 
 ### Boss (`render/drawBoss.ts` + `render/bossLayout.ts`)
 - Casco blindado em camadas (lâminas → coroa com o núcleo → casco → um encaixe por palavra), só com cores de jogo (`--danger`; a palavra atual com o contorno de alvo travado). Palavra destruída = buraco com rachaduras (`hashUnit`, repetível); o núcleo enfraquece com a vida. Frase em linhas equilibradas, sempre dentro do campo (fonte 1,25× a das palavras; 1× em campos < 520 px). `y` = borda **inferior** do casco.
@@ -249,7 +266,7 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
 
 ### Áudio (decisão da Fase 2)
 - **Sem arquivos de efeitos sonoros:** cada som é uma *receita* de dados (`audio/recipes.ts`) com camadas de oscilador (`tone`: forma de onda, frequência, glide) e de ruído filtrado (`noise`: filtro, cutoff, sweep), cada uma com envelope ataque → release exponencial.
-- `audio/plan.ts` (puro, testado) aplica pitch/jitter e cooldown; `audio/AudioEngine.ts` sintetiza com Web Audio (master gain → compressor). O `AudioContext` só é criado/retomado no primeiro gesto do usuário (tecla ou clique).
+- `audio/plan.ts` (puro, testado) aplica pitch/jitter e cooldown; `audio/AudioEngine.ts` sintetiza com Web Audio (master gain → compressor). O `AudioContext` só é criado/retomado no primeiro gesto do usuário (tecla, clique ou dedo que levanta da tela).
 - O jogo depende só da interface `SoundPlayer`; eventos de jogo → sons em `Game.flushEvents`.
 - Cosmético `soundPack` = outro conjunto de receitas (mesmo formato), sem arquivos.
 - Música ainda não decidida (pasta `public/music/` mantida).
@@ -517,7 +534,7 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Desempenho do build (2026-11-22, gzip): carga inicial ≈ 56 KB (JS 48,2 + CSS 4,9 + HTML 2,5 + `boot.css`). Firebase fora do bundle inicial, em chunks dinâmicos pedidos logo após a inicialização, sem bloquear a primeira tela: núcleo 11,4, Auth 36,6, Firestore lite 39,0, App Check 5,5 (≈ 92 KB). O script do reCAPTCHA vem do Google, também em segundo plano. Nenhum `modulepreload` do Firebase no HTML; a ativação do debug token não entra no build de produção.
   - Pendências no console: registrar o app no App Check com a chave secreta do reCAPTCHA, registrar o debug token de desenvolvimento, criar o secret `VITE_RECAPTCHA_SITE_KEY` no GitHub e, depois de conferir as métricas, aplicar a imposição no Firestore e no Authentication.
 - [x] **Arte dos canhões (fora das fases, 2026-11-22):** os 4 canhões redesenhados em camadas (§7 "Canhão"), com o mesmo tamanho e a mesma boca; giro por mola, recuo por cano, clarão/faíscas/fumaça na boca, núcleo ligado ao combo e ao EMP. Revisado com as pranchas de `npm run share:images -- --cannons` e no jogo real (Edge headless). A imagem de compartilhamento foi regerada com o canhão novo. Custo: JS inicial 48,2 → 53,3 KB gzip.
-- [ ] **Fase 7 — Extras:** Desafio Diário (feito), boss (feito), progressão com conquistas e coleções (feito), suporte mobile.
+- [x] **Fase 7 — Extras:** Desafio Diário, boss, progressão com conquistas e coleções, suporte mobile.
   - **Desafio Diário** (2026-11-22; §6 Modos, §8 "Bônus do Desafio Diário", §9 Ranking): modo `daily`, envio com `mode` 'daily' e `day = dayIndex()`, aba "Diário", contagem no card do menu e no ranking, bônus por posição. `firestore.rules` não mudou.
   - Testado com servidores falsos que aplicam os limites das regras, com o `App` completo no Edge headless (virada do dia com a tela aberta e no meio da partida, data do aparelho errada, dois bônus em sequência, fora do top 50, anônimo, build offline, 360 px) e conferindo o que o SDK do Firestore envia (com `fetch` simulado). Não testado contra o Firebase real.
   - Junto: o menu mais alto que a tela (celular) rola desde o topo (`justify-content: safe center`); antes, conta e saldo ficavam inalcançáveis.
@@ -527,6 +544,9 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Testado: as regras no **emulador do Firestore** (31 casos, com as regras antigas e novas); o código real do cliente (SDK + `FirestoreInventoryRepository` + `Economy`) contra o emulador com as regras do repositório e os documentos do seed, inclusive as esperas reais de 30 s; o `App` no Edge headless em build offline (virada do dia no menu, na partida e na tela Progresso, sequência quebrada, Zen, teclado, rajada com teclas reais, inglês, 360 px, 1366×640). Não testado contra o Firebase real.
   - JS inicial 62,7 → 73,5 KB gzip; CSS 5,5 → 6,3 KB.
   - Pendências no console, **nesta ordem**: publicar `firestore.rules`, rodar `npm run seed:shop`, publicar o jogo. Fora de ordem nada se perde: os itens de conquista só esperam para ser liberados.
+  - **Suporte a celular** (2026-11-22; §6 "Celular e toque", §7 "Layout compacto"): teclado virtual, layout que acompanha o `visualViewport`, HUD compacto, botões de pausa e EMP, menus e loja a 360 px (e 320). Sem dependências novas; `firestore.rules`, a sequência de palavras e o balanceamento não mudaram.
+  - Testado no Edge headless com toque emulado: o fluxo inteiro (toque, digitação por texto e por composição, EMP, pausa, fechar/reabrir o teclado, relatório), todas as telas a 360×740 em pt-BR e EN, 320×568, 740×360, 820×1180 e o build de produção; no desktop, as caixas da interface e o layout do canvas são iguais aos de antes em 4 tamanhos. O headless não tem teclado virtual: o `visualViewport` foi simulado. **Não testado em aparelho real** (Android com Gboard/Samsung, iPhone).
+  - JS inicial 73,5 → 75,3 KB gzip; CSS 6,3 → 7,7 KB.
 
 ---
 

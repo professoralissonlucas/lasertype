@@ -10,6 +10,7 @@ import {
   bossTop,
   bossWordX,
   bossWordY,
+  BOSS_COMPACT,
   BOSS_LAYOUT,
   computeBossPlate,
   wrapBalanced,
@@ -21,6 +22,8 @@ import { Skin } from './skin.ts';
 
 const PHRASES = LANGUAGES.flatMap((lang) => BOSS_TIERS.flatMap((tier) => getBossPhrases(lang)[tier]));
 const SCREENS = [
+  [320, 315], // a small phone and a phone with the keyboard up
+  [360, 440],
   [360, 640],
   [390, 844],
   [820, 1180],
@@ -49,14 +52,15 @@ describe('wrapping', () => {
 describe.each(SCREENS)('boss plate on %i×%i', (width, height) => {
   const layout = computeLayout(width, height);
   const charWidth = charOf(layout.fontSize);
+  const { sideGap, padX } = layout.compact ? BOSS_COMPACT : BOSS_LAYOUT;
 
   it('every phrase fits inside the play field, in order and without overlaps', () => {
     for (const phrase of PHRASES) {
       const plate = computeBossPlate(layout, charWidth, phrase.split(' '));
-      expect(plate.width, phrase).toBeLessThanOrEqual(layout.fieldWidth - 2 * BOSS_LAYOUT.sideGap + 0.5);
+      expect(plate.width, phrase).toBeLessThanOrEqual(layout.fieldWidth - 2 * sideGap + 0.5);
       expect(plate.words.map((word) => word.text).join(' ')).toBe(phrase);
       for (const [i, word] of plate.words.entries()) {
-        expect(Math.abs(word.x + word.width / 2) + word.width / 2).toBeLessThanOrEqual(plate.width / 2 - BOSS_LAYOUT.padX + 0.5);
+        expect(Math.abs(word.x + word.width / 2) + word.width / 2).toBeLessThanOrEqual(plate.width / 2 - padX + 0.5);
         const next = plate.words[i + 1];
         if (next?.line === word.line) expect(next.x).toBeGreaterThan(word.x + word.width);
         else if (next) expect(next.line).toBe(word.line + 1);
