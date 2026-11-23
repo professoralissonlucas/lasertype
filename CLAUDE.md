@@ -44,9 +44,9 @@ npm run build      # build de produção em dist/
 npm run preview    # testar o build
 npm run test       # vitest
 npm run typecheck  # tsc --noEmit (app) + tsc --noEmit -p scripts (scripts Node)
-npm run seed:shop  # grava shop/{id} e shop/_config no Firestore (ver §9 "Loja no Firestore"); -- --dry-run só mostra
+npm run seed:shop  # grava shop/{id} (à venda e de conquista) e shop/_config no Firestore (ver §9 "Loja no Firestore"); -- --dry-run só mostra
 npm run share:images  # regera public/og-image.jpg e public/apple-touch-icon.png (ver §10 "Página e compartilhamento")
-npm run share:images -- --cannons [pasta]  # pranchas dos 4 canhões (1×, 2×, zoom, sequência do tiro, energia) para revisar a arte
+npm run share:images -- --cannons [pasta]  # pranchas dos canhões (1×, 2×, zoom, sequência do tiro, energia) para revisar a arte
 ```
 
 Antes de dar uma tarefa como concluída: `npm run typecheck && npm run test && npm run build` devem passar.
@@ -65,6 +65,7 @@ src/
     state.ts              # estado da partida
     spawner.ts            # geração de palavras, ondas e bosses (aceita seed)
     boss.ts               # regras puras do boss (quando vem, frase, velocidade, bônus)
+    burst.ts              # WPM de rajada (puro: só o tempo de digitação)
     testing/typist.ts     # digitador simulado dos testes de balanceamento (o jogo não importa)
     targeting.ts          # lógica de mira/travamento
     input.ts              # captura de teclado, normalização de acentos
@@ -82,16 +83,20 @@ src/
     types.ts              # categorias, raridades, params tipados por categoria
     catalog.ts            # catálogo de itens (dados puros) + DISCOUNT_ORDER
     equip.ts              # resolve o que está equipado (com fallback para o padrão)
+    collections.ts        # coleções (campo set dos itens) e os títulos que elas dão
+  progression/            # lógica pura: types, xp (nível, baú), streak, missions, achievements,
+                          # progress (Progress, ProgressGain, applyGain, leitura tolerante);
+                          # testing.ts só para testes
   economy/                # lógica pura (sem DOM) + os repositórios (onde o inventário mora)
     types.ts              # Inventory (espelha users/{uid}), ofertas, erros de compra, EconomyChange, SyncConfig
-    rewards.ts            # moedas por partida (missões, streak, XP: só os campos por enquanto)
+    rewards.ts            # moedas por partida
     dailyBonus.ts         # bônus do Desafio Diário (puro: tabela, dias a acertar)
     DailyBonusCollector.ts # acha a posição final nos dias fechados e entrega o bônus ao repositório
     shop.ts               # loja rotativa (dia de jogo, DISCOUNT_ORDER, seed = data)
-    inventory.ts          # posse/equipamento/compra (puro: checkPurchase, applyPurchase, parseInventory)
+    inventory.ts          # posse/equipamento/compra/título (puro: checkPurchase, applyPurchase, applyUnlock, parseInventory)
     repository.ts         # interface InventoryRepository (uma operação por tipo de escrita) + versão localStorage (builds offline)
-    firestoreRepository.ts # FirestoreInventoryRepository: users/{uid} + cache local, moedas pendentes, fila de escritas
-    Economy.ts            # estado + repositório + listeners (a UI só fala com ele)
+    firestoreRepository.ts # FirestoreInventoryRepository: users/{uid} + cache local, lotes de recompensa, fila de escritas
+    Economy.ts            # economia + progressão: estado + repositório + listeners (a UI só fala com ele)
   firebase/
     app.ts                # config VITE_FIREBASE_* + carregamento sob demanda do SDK (null = offline)
     types.ts              # estado da conta, Board, ScoreFields, RankingConfig
@@ -103,9 +108,10 @@ src/
   profile/
     nickname.ts           # apelido do ranking (validação, padrão "Piloto" + 4 dígitos)
   ui/                     # app.ts (troca de telas) + telas: menu, hud, combatLog, pause, report, settings, shop
-                          # (+ shopPreview, shopModel, previewScript), ranking, account (selo), nicknameDialog, toast
+                          # (+ shopPreview, shopModel, previewScript), progress (+ progressText: textos puros), ranking,
+                          # account (selo), nicknameDialog, toast
   audio/                  # receitas de som (dados), planejamento puro e AudioEngine (Web Audio)
-  utils/                  # rng com seed, math, pool, storage, day (dia de jogo: dayIndex/dayKey)
+  utils/                  # rng com seed, math, pool, storage, day (dia de jogo: dayIndex/dayKey), id (ids aleatórios)
   styles/
   page.test.ts            # index.html: metadados, imagem de prévia e guarda de inicialização
 public/
@@ -176,6 +182,10 @@ bonus_altura   = 1.5 se destruída na metade superior da tela, senão 1.0
 - O multiplicador usa o combo **já contando** a palavra destruída (a 5ª palavra limpa já vale 2x).
 - "Metade superior" = metade superior do campo (y normalizado < 0,5). `letras` soma as passadas (blindada conta 2×).
 - Bomba/EMP: `pontos_palavra × 0,5`.
+
+**WPM de rajada** (`game/burst.ts`, `CONFIG.burst`): melhor velocidade em 10 palavras digitadas seguidas (3 letras ou mais; palavras do boss contam), somando só o tempo entre a primeira e a última letra de cada uma: `(letras − 1) / 5 por minuto`. Erro custa só o tempo; Backspace recomeça a palavra; bomba e EMP não contam nem interrompem. Teto 250. Aparece no Mission Report.
+- Existe porque o WPM da partida inclui a espera pelas palavras: um digitador **perfeito de 300 WPM** marca no máximo 80 / 85 / 90 no Survival (Fácil / Normal / Difícil) e 26 / 36 / 54 no Time Attack. Não usar o WPM da partida como meta de velocidade (`burst.test.ts`).
+
 Nota final (S/A/B/C/D) combina precisão, WPM e % de palavras destruídas (fórmula em `scoring.ts`):
 ```
 nota = 0.40 × precisão + 0.35 × min(1, WPM / 60) + 0.25 × defesa
@@ -221,7 +231,7 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
 - Desenhado em camadas, em Canvas 2D vetorial: plataforma → anel de energia → cano(s) → torre → núcleo de energia → efeitos da boca. Coordenadas locais ao pivô; a luz vem sempre de cima à esquerda (as partes que giram montam o caminho girado e preenchem com gradiente do mundo). Gradientes em cache por `Skin`; brilhos são sprites com `'lighter'`, sem `shadowBlur`. Custo medido: ~0,06–0,09 ms por quadro.
 - **Mesmo tamanho para todos:** 60 px de largura (±`LAYOUT.baseRadius`) e a boca do cano a `LAYOUT.barrelLength` (52 px) do pivô, onde o laser nasce (o Gêmeo com os dois canos a ±4,5 px). A base desce até 16 px abaixo do pivô. `drawCannon.test.ts` desenha num contexto falso e confere a área, a boca, o recuo e que o contexto volta como estava.
 - Parâmetros (`CannonParams`): `body` (`armored` | `heavy` | `crystal` | `orbital`), `barrel` (`single` | `twin` | `prism` | `rail`), `hull` (3 tons, escuro → claro), `edge`, `highlight`, `trim`, `opacity` (< 1 = translúcido). O anel e o núcleo usam sempre a cor do laser equipado; num erro de digitação ficam em `--danger`.
-- Identidades: **Sentinela** (padrão) bunker de aço cinza-azulado com torre esférica, rebites, respiros e cano com aletas, cinta e freio de boca; **Gêmeo** base pesada com células de energia (as barras acendem com a energia), cabeça quadrada e dois canos que alternam os tiros (cada um recua sozinho); **Cristal** prismas translúcidos com facetas, reflexos e lascas, o núcleo aparece através da gema; **Halo** torre branca com visor, trilhos com bobinas e linha de energia, e um anel orbital inclinado com 3 nós girando (metade de trás atrás da torre).
+- Identidades: **Sentinela** (padrão) bunker de aço cinza-azulado com torre esférica, rebites, respiros e cano com aletas, cinta e freio de boca; **Gêmeo** base pesada com células de energia (as barras acendem com a energia), cabeça quadrada e dois canos que alternam os tiros (cada um recua sozinho); **Cristal** prismas translúcidos com facetas, reflexos e lascas, o núcleo aparece através da gema; **Halo** torre branca com visor, trilhos com bobinas e linha de energia, e um anel orbital inclinado com 3 nós girando (metade de trás atrás da torre); **Dourado** (conquista) o bunker da Sentinela em ouro polido com o cano de trilhos.
 - Movimento (`entities/Cannon.ts`): giro por mola criticamente amortecida (acelera e assenta sem passar do alvo); no tiro, a mira encaixa no alvo (feixe e cano alinhados), o cano recua e volta com suavização (`recoilKick`), a boca brilha ~0,12 s, com clarão, faíscas e fumaça curta (aleatoriedade por `hashUnit` com o número do tiro: repetível, sem alocar). Parado, as luzes "respiram".
 - **Núcleo de energia:** `coreEnergy(multiplicador, carga do EMP)` vai de 0,2 (brasa) a 0,95; EMP pronto = 1, com ondas saindo do núcleo. Menus: 0,3. A prévia da loja carrega o núcleo conforme a palavra é atirada.
   - Modo daltônico e volume de música ficam para quando houver música/cosméticos de cor.
@@ -253,7 +263,16 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
 ### Ganho de moedas
 - Partida: `floor((min(floor(pontos / 100), 80) + bônus de nota) × fator do modo)`; bônus S +20, A +10, B +5, C/D 0; fator 1 (Survival, Time Attack, Diário) ou 0,25 (Zen). Máximo 100 por partida. Creditado uma vez, ao abrir o Mission Report (que mostra o detalhe e o saldo). Números em `CONFIG.economy`, lógica em `economy/rewards.ts`.
 - Online, as moedas aparecem na hora e ficam **pendentes** até o servidor aceitar: cada escrita de recompensa leva no máximo 150 e espera 30 s desde a anterior (limites das regras, em `CONFIG.sync`); o resto vai nas escritas seguintes, sem perder nada (ver §9 "Sync de users/{uid}").
-- Missões diárias (3 por dia, geradas pela data), streak de login, nível por XP. **Por enquanto só os campos existem** em `users/{uid}` (`xp`, `level`, `streak`, `lastLogin`, `stats`, criados com valores iniciais; de `stats` só `dailyDay` é atualizado); a lógica fica para depois.
+
+### Progressão (`CONFIG.progression`, `progression/`)
+Nenhum prêmio passa de 150 moedas (cabe numa escrita). Zen dá só XP: não conta em missões, estatísticas nem conquistas.
+- **XP:** `min(letras certas + 2 × palavras + 50 × bosses, 1000) × fator` (Zen 0,25). Nível n → n+1 custa `200 + 100 × (n − 1)`. **Baú** ao subir: `min(150, 40 + 5 × nível)` moedas. Referência (35 WPM no Normal, ~350 XP por partida): nível 5 em ~4 partidas, 10 em ~15, 20 em ~60.
+- **Missões:** 3 por dia de jogo, iguais para todos, uma por faixa: volume (30), habilidade (40), desafio (50). Em cada faixa todos os modelos aparecem uma vez antes de repetir (ciclo embaralhado por `dayIndex`); a meta sai da seed `missions:YYYY-MM-DD`. A partida conta para o dia em que **termina**; a missão completa é paga na hora, sem botão de resgate. Mudar `missions.slots` no meio do dia troca as missões de quem recarregar.
+- **Streak de login:** 20 · 30 · 40 · 60 · 80 · 110 · 150; depois do dia 7 a tabela recomeça (a contagem continua); faltar um dia volta ao dia 1. Conta ao abrir o jogo, ao voltar ao menu e na virada com o menu aberto; online, só depois de ler `users/{uid}`. Relógio do aparelho adiantado: a sequência e as missões esperam até aquele dia.
+- **Conquistas** (`achievements.ts`): cada uma libera um item não comprável. Relâmpago (100 WPM de **rajada**) → Canhão Dourado; Linha de frente (onda 10) → Tema Eclipse; Sem falhas (combo 30) → Laser Áureo; Caça-bosses (10 bosses no total) → Explosão Fogos; Presença diária (7 dias seguidos) → Borda Dourada. O progresso vem de `stats`, contado a partir desta versão (não é retroativo).
+- **Coleções** (`cosmetics/collections.ts`): todo item que não é padrão tem um `set`: aurora, solar, prism, horizon (itens à venda) e golden (os de conquista). Ter todos dá o **título**; a posse é derivada, só o título em uso é gravado (`equipped.title`, escrita de equipar). Aparece no menu, na tela Progresso e no relatório. No ranking não: exigiria um campo novo em `scores`.
+- **Telas:** "Progresso" (abas Missões, Conquistas, Coleções); linha de nível e missões no menu; XP, barra, baú, missões e conquistas no relatório; avisos de streak e de item liberado (nunca por cima de uma partida).
+- Referência de renda (35 WPM, 5 partidas por dia no Normal): ~215 moedas por dia só das partidas, ~525 com a progressão. A loja inteira custa 25.500.
 
 ### Bônus do Desafio Diário (`CONFIG.dailyBonus`, `economy/dailyBonus.ts`)
 - Moedas pela posição **final**: 1º 150 · 2º 120 · 3º 100 · 4º–10º 70 · 11º–25º 40 · 26º–50º 20. Só no quadro **pt-BR** e a partir de 1.000 pontos (abrir e encerrar não paga). Todo valor cabe numa escrita de recompensa (≤ 150).
@@ -276,7 +295,7 @@ S ≥ 0.90 · A ≥ 0.80 · B ≥ 0.65 · C ≥ 0.50 · senão D  (menos de 5 pa
 
 ### Categorias (`type` no catálogo)
 `cannon`, `theme`, `laserColor`, `shotStyle`, `impact`, `explosion`, `wordBorder`, `reticle`, `comboAura`, `perimeter`, `font`, `soundPack`, `music`, `title`, `avatarFrame`, `victoryAnim`.
-- Implementadas (Fase 4.5): `cannon`, `theme`, `laserColor`, `explosion`, `wordBorder` — 4 itens cada, o primeiro é o padrão grátis (preço 0, possuído por todos) e 3 estão à venda. Nova categoria = tipo em `cosmetics/types.ts` + itens + renderer.
+- Implementadas (Fase 4.5): `cannon`, `theme`, `laserColor`, `explosion`, `wordBorder` — 5 itens cada: o primeiro é o padrão grátis (preço 0, possuído por todos), 3 estão à venda e o último é de conquista (preço null). `title` existe como recompensa de coleção, fora de `COSMETIC_TYPES` (não é desenhado no canvas). Nova categoria = tipo em `cosmetics/types.ts` + itens + renderer.
 
 ### Item do catálogo
 ```ts
@@ -286,15 +305,15 @@ interface CosmeticItem<T extends CosmeticType> {
   name: { 'pt-BR': string; en: string }; // nome localizado fica no próprio dado
   rarity: 'common' | 'rare' | 'epic' | 'legendary';
   price: number | null;    // 0 = padrão (todos possuem), null = só por conquista
-  unlock?: string;         // id da conquista, se aplicável
-  set?: string;            // coleção
+  unlock?: string;         // id da conquista (itens com price null)
+  set?: CollectionId;      // coleção (todo item que não é padrão)
   params: CosmeticParams[T]; // tipados por categoria (cosmetics/types.ts), lidos pelos renderers
 }
 ```
 - Renderers recebem `params`; adicionar item novo = só adicionar dados (e incluir em `DISCOUNT_ORDER` se for vendável).
 - Preço dos vendáveis = tabela de raridade (`CONFIG.economy.rarityPrice`).
 - Cosméticos mudam só a aparência e mantêm as pistas de jogo: o tema muda só o fundo do canvas (não o HUD); a borda muda a forma e a cor das palavras normais, mas travada/especiais mantêm suas cores; o canhão tem sempre o mesmo tamanho (a boca do cano não muda) e o brilho do núcleo é igual em todos (mostra combo/EMP, não dá vantagem); dano/perímetro continuam em `--danger`.
-- Itens de conquista não são compráveis (ex: Canhão Dourado ao atingir 100 WPM).
+- Itens de conquista não são compráveis: nunca entram na loja nem em `DISCOUNT_ORDER` (o rodízio e os descontos não mudam quando um é criado).
 
 ### Loja rotativa (`economy/shop.ts`)
 - 4 itens por dia de jogo, iguais para todos; o item com desconto vem primeiro.
@@ -307,12 +326,12 @@ interface CosmeticItem<T extends CosmeticType> {
 - Tela da loja: abas "Loja do dia" e "Inventário" (todas as categorias; equipar o que possui), contagem até a próxima rotação e **prévia ao vivo** do item selecionado (mini canvas com a cena roteirizada de `ui/previewScript.ts`, desenhada com as mesmas funções do jogo, por cima do que está equipado).
 
 ### Inventário
-- `Inventory = { coins, owned, equipped, lastPurchase }` (mesmos campos de `users/{uid}`); `owned` guarda só compras (padrões são implícitos, nunca entram em `owned`); `equipped` sem a categoria = padrão.
-- Leitura tolerante (`parseInventory`): moedas inválidas → 0, ids desconhecidos descartados, equipado precisa existir, ser da categoria e estar possuído.
-- `InventoryRepository` (`economy/repository.ts`) tem **uma operação por tipo de escrita** (`reward`, `purchase`, `equip`, mais `load` e `subscribe`), porque as regras aceitam um só tipo de mudança por escrita; salvar o inventário inteiro não caberia nelas. Duas implementações:
-  - **Build offline** (sem `VITE_FIREBASE_*`): `localInventoryRepository`, tudo no `localStorage` em `lasertype.inventory.v1`.
+- `Inventory = { coins, owned, equipped, lastPurchase }` (mesmos campos de `users/{uid}`); `owned` guarda compras e itens liberados (padrões são implícitos, nunca entram em `owned`); `lastPurchase` = último item que entrou em `owned`; `equipped` sem a categoria = padrão, `equipped.title` ausente = sem título.
+- Leitura tolerante (`parseInventory`): moedas inválidas → 0, ids desconhecidos descartados, equipado precisa existir, ser da categoria e estar possuído; o título precisa da coleção completa.
+- `InventoryRepository` (`economy/repository.ts`) tem **uma operação por tipo de escrita** (`reward` e `login` = recompensa, `purchase`, `unlock`, `equip`, mais `load`, `progress` e `subscribe`), porque as regras aceitam um só tipo de mudança por escrita; salvar o inventário inteiro não caberia nelas. Duas implementações:
+  - **Build offline** (sem `VITE_FIREBASE_*`): `localInventoryRepository`, tudo no `localStorage` em `lasertype.inventory.v1` e `lasertype.progress.v1` (sem servidor não há limite por escrita: tudo é pago na hora).
   - **Build online**: `FirestoreInventoryRepository` — a verdade é `users/{uid}`; o `localStorage` é só cache (§9). O progresso antigo de `lasertype.inventory.v1` (testes das fases offline) é ignorado, não migrado.
-- `Economy` emite mudanças tipadas (`reward`, `purchase`, `equip` e `sync` = versão do servidor chegou: carga, outro dispositivo, troca de conta).
+- `Economy` emite mudanças tipadas (`reward`, `login`, `purchase`, `unlock`, `equip`, `title` e `sync` = versão do servidor chegou: carga, outro dispositivo, troca de conta). `finishMatch(report)` credita a partida e devolve tudo o que o relatório mostra.
 
 ---
 
@@ -321,7 +340,7 @@ interface CosmeticItem<T extends CosmeticType> {
 ### `firestore.rules` é o contrato
 - O arquivo na raiz é a fonte da verdade do backend: **o cliente se adapta a ele, exatamente**. Mudar qualquer regra = perguntar antes.
 - Só podem ser ajustados (avisando) as listas de identificadores (`mode`/`diff`/`lang`) para bater com os nomes do código e `maxPointsPerSecond`, calculado pelo máximo teórico de `scoring.ts`.
-- `firebase/rules.test.ts` lê o arquivo e falha se divergir do cliente: listas, limites (WPM, duração, nome, precisão), `maxPointsPerSecond`, campos e id do documento, dia de jogo (03:00 UTC), fórmula do desconto, campos de cada escrita em `users/{uid}` (criação, recompensa, compra, equipar, perfil), limites da recompensa (150 / 30 s = `CONFIG.sync`) e os campos da coleção `shop` que o seed grava.
+- `firebase/rules.test.ts` lê o arquivo e falha se divergir do cliente: listas, limites (WPM, duração, nome, precisão), `maxPointsPerSecond`, campos e id do documento, dia de jogo (03:00 UTC), fórmula do desconto, campos de cada escrita em `users/{uid}` (criação, recompensa, compra, liberação, equipar, perfil), limites da recompensa (150 moedas / 2.000 XP / 30 s = `CONFIG.sync`) e os campos da coleção `shop` que o seed grava.
 - Publicar: Console → Firestore Database → Regras → colar o arquivo → Publicar (o deploy não publica regras).
 
 ### Autenticação (`firebase/auth.ts`)
@@ -352,13 +371,19 @@ interface CosmeticItem<T extends CosmeticType> {
 users/{uid}     # criado na primeira sessão (firebase/profile.ts → newUserFields)
   name ("Piloto" + 4 dígitos), coins 0, xp 0, level 1, streak 0, lastLogin null   # photo nunca é gravado
   owned:    { [itemId]: true }        # começa {}; itens padrão não entram
-  equipped: { [type]: itemId }        # começa {}
+  equipped: { [type]: itemId, title?: titleId }   # começa {}
   lastReward: timestamp               # serverTimestamp() na criação e em cada recompensa
   lastPurchase: itemId | null
-  stats: { games: 0, bestScore: 0, bestWpm: 0 }   # só os campos, sem lógica ainda
-    + stats.dailyDay: dayIndex                     # último dia do Desafio Diário com bônus pago
+  xp, level (último nível com o baú creditado), streak, lastLogin (dayIndex do último login contado)
+  stats: { games: 0, bestScore: 0, bestWpm: 0 }   # na criação; as recompensas acrescentam:
+    words, bosses, bestBurst, bestCombo, bestWave, bestStreak
+    missions: { day, progress: [n, n, n], paid: [bool, bool, bool] } | null
+    owed: moedas já ganhas e marcadas, ainda a pagar      # até 150 por escrita
+    batch: id do último lote de recompensa gravado
+    dailyDay: dayIndex                             # último dia do Desafio Diário com bônus pago
 
-shop/{itemId}   → { price, rarity, type }      # somente leitura para clientes
+shop/{itemId}   → { price, rarity, type }      # à venda; somente leitura para clientes
+shop/{itemId}   → { achievement: true, rarity, type }   # item de conquista, sem price: não pode ser comprado
 shop/_config    → { discountOrder: [itemId, ...] }  # mesma ordem de DISCOUNT_ORDER
 scores/{uid}_{mode}_{diff}_{lang}_{day}
                 → { uid, name, score (int), wpm (≤ 250), accuracy (0–100), mode, diff, lang,
@@ -369,6 +394,7 @@ scores/{uid}_{mode}_{diff}_{lang}_{day}
 - `users/{uid}`: só o dono lê/escreve; criação com moedas/xp 0, `owned` vazio, nome válido e `lastReward == request.time`. Cada atualização é de **um** tipo:
   - **Recompensa:** só `coins, xp, level, stats, streak, lastLogin, lastReward`; ganho de 0 a 150 moedas e 0 a 2.000 XP; `lastReward == request.time` e mais de 30 s desde a anterior.
   - **Compra:** só `coins, owned, lastPurchase`; exatamente 1 item novo (= `lastPurchase`); `coins` cai exatamente o preço do dia (`shop/{id}.price`, ou `floor(price * 7 / 100) * 10` se for o item de `shop/_config.discountOrder[dayIndex % n]`); saldo ≥ 0. (As regras não conferem se os outros 3 itens estavam na loja do dia: isso exigiria o rng no servidor.)
+  - **Liberação** (`isUnlock`): só `owned, lastPurchase`; exatamente 1 item novo (= `lastPurchase`) com `shop/{id}.achievement == true`; moedas não mudam. O servidor **não** confere se a conquista foi cumprida (é só cosmético). Fica **antes** de `isPurchase()` no `allow update`: os campos são um subconjunto dos da compra, e `isPurchase()` dá erro de avaliação em itens sem `price`, o que recusa a escrita (visto no emulador).
   - **Equipar:** só o mapa `equipped`. **Perfil:** só `name` (3–12) e `photo`.
 - `scores`: leitura pública; criação/atualização só por conta Google, com `uid` próprio, campos e limites validados, `score ≤ duration × maxPointsPerSecond` (1977, ver §11 Fase 5) e id no formato acima; atualização só com score maior.
 - `shop/*` somente leitura (gravado pelo script admin).
@@ -386,20 +412,22 @@ scores/{uid}_{mode}_{diff}_{lang}_{day}
 ### Sync de `users/{uid}` (`economy/firestoreRepository.ts`)
 - **Uma escrita = um tipo, só com os campos dele** (construtores puros em `firebase/profile.ts`, conferidos por `rules.test.ts`):
   - criação: transação que lê e, se não existe, grava `newUserFields` (moedas 0, xp 0, `owned` {}, `lastReward = serverTimestamp()`);
-  - recompensa: transação com `coins` (saldo do servidor + até 150) e `lastReward = serverTimestamp()`;
+  - recompensa (`rewardWrite`): transação que aplica um **lote** (moedas da partida + `ProgressGain`) sobre o progresso do servidor com `applyGain` e grava `coins` (+ até 150), `xp`, `level`, `streak`, `lastLogin`, `stats.*` (caminhos de campo) e `lastReward = serverTimestamp()`. Cada prêmio (baú, missão, dia seguido) vai para `stats.owed` **junto com a sua marca** (`level`, `missions.paid`, `lastLogin`): nunca é pago duas vezes, em dois dispositivos também. O que passa de 150 continua em `stats.owed` e sai nas escritas seguintes;
   - bônus do Desafio Diário: a mesma recompensa mais `stats.dailyDay` (caminho de campo); se `dailyDay` já é aquele dia ou depois, nada é gravado;
   - compra: transação que lê o saldo/itens do servidor e grava `coins` (− preço exato), `owned.<id>` (caminho de campo: o resto do mapa fica intacto) e `lastPurchase`;
+  - liberação: transação que grava `owned.<id>` e `lastPurchase`. `Economy` a pede sozinha para toda conquista atingida e não possuída (fim de partida, login, carga); recusada (regras ou seed ainda não publicados) → tenta de novo depois de 2 min;
   - equipar: `updateDoc` só com `equipped`; perfil: `updateDoc` só com `name`.
 - Todas as escritas passam por **uma fila** (uma por vez), sempre para o uid conectado.
-- **Cache** no `localStorage` em `lasertype.cloud.v1`, por uid (`{ last, users: { [uid]: { inventory, pending, bonuses, dailySettled, equipDirty, name, nameDirty, nextRewardAt } } }`): mostra moedas e cosméticos na hora (inclusive sem rede) com o último uid enquanto o Auth responde. Leitura tolerante.
+- **Cache** no `localStorage` em `lasertype.cloud.v1`, por uid (`{ last, users: { [uid]: { inventory, progress, pending, gain, batch, bonuses, dailySettled, equipDirty, name, nameDirty, nextRewardAt } } }`): mostra moedas e cosméticos na hora (inclusive sem rede) com o último uid enquanto o Auth responde. Leitura tolerante.
 - Ao abrir: o documento do servidor vence, exceto o que ainda não foi enviado (moedas pendentes, equipar/apelido "sujos"), que é reenviado em seguida.
-- **Moedas pendentes:** saldo mostrado = confirmado + pendente. Escrita de recompensa com `min(pendente, 150)`, no mínimo 30 s (+2 s de margem, relógio local) depois da anterior ou da criação; recusada ou sem rede → continua pendente e tenta de novo com espera crescente. Moedas ganhas antes de qualquer conta responder (primeira visita sem rede) vão para a primeira conta que responder.
+- **Pendentes:** o que se vê = o confirmado + o que ainda não foi enviado (`pending` moedas, `gain` progresso, `batch` em trânsito) + `stats.owed`. Uma escrita no mínimo 30 s (+2 s de margem, relógio local) depois da anterior ou da criação; recusada ou sem rede → tenta de novo com espera crescente. O que foi ganho antes de qualquer conta responder (primeira visita sem rede) vai para a primeira conta que responder.
+- **Lote:** ao enviar, o que está pendente é congelado com um id aleatório (`utils/id.ts`; até 2.000 XP, o resto fica para o próximo), que vai para `stats.batch`. Se a resposta se perde, o lote é encontrado no documento (na transação ou ao reabrir) e não é aplicado de novo. Compras com moedas ainda não confirmadas respondem "ainda indo para o servidor".
 - **Bônus na fila** (`bonuses` no cache, do dia mais antigo ao mais novo): vão antes das moedas pendentes, no mesmo ritmo de 30 s; se um falha, as moedas passam na frente na vez seguinte (um bônus nunca as bloqueia).
 - Equipar e apelido aparecem na hora e são reenviados quando a conexão volta. Sem rede, a compra responde "sem conexão" (compras precisam do servidor).
 - `App` chama `setUser(uid)` a cada mudança de conta (`null` = conectando/sem rede: mantém o cache). Configurações continuam só locais (não há campos para elas nas regras).
 
 ### Loja no Firestore (`scripts/seed-shop.ts`)
-- As regras precisam de `shop/{id} = { price, rarity, type }` (só itens compráveis) e `shop/_config = { discountOrder }`. Sem eles toda compra é recusada.
+- As regras precisam de `shop/{id} = { price, rarity, type }` (itens compráveis), `shop/{id} = { achievement: true, rarity, type }` (itens de conquista, **sem** `price`) e `shop/_config = { discountOrder }`. Sem eles toda compra e toda liberação é recusada.
 - Gerados por `firebase/shopDocs.ts` (puro, valida que `DISCOUNT_ORDER` lista cada comprável uma vez) e gravados com `firebase-admin` num batch. Lista documentos antigos que saíram do catálogo (apagar à mão no console).
 - Chave: Console → Configurações do projeto → Contas de serviço → Gerar nova chave privada. Guardar **fora do repositório**; `.gitignore` cobre `*service-account*.json`, `*-admin.json` e `*firebase-adminsdk*.json`.
 - Rodar (Windows/PowerShell): `$env:GOOGLE_APPLICATION_CREDENTIALS = "C:\caminho\chave.json"; npm run seed:shop` (bash: `GOOGLE_APPLICATION_CREDENTIALS=... npm run seed:shop`). `npm run seed:shop -- --dry-run` mostra o que seria gravado sem credencial. Requer Node ≥ 22.18 (TypeScript nativo).
@@ -479,7 +507,7 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Cada escrita é de um tipo só, com os campos permitidos: recompensa (transação, ≤ 150, 30 s, excedente pendente sem perder moedas), compra (transação; recusa na virada do dia recarrega a loja e avisa), equipar, perfil.
   - Desconto literal `Math.floor(price * 7 / 100) * 10` em `shop.ts` (saíram `discountKeepTenths`/`discountStep` do `CONFIG`).
   - `scripts/seed-shop.ts` (`npm run seed:shop`) com `firebase-admin` (devDependency autorizada) e `GOOGLE_APPLICATION_CREDENTIALS`; `scripts/tsconfig.json` dá os tipos do Node só aos scripts.
-  - Missões, streak e XP: **só os campos** (lógica pendente).
+  - Missões, streak e XP: só os campos (a lógica veio na Fase 7).
   - Testado com servidor falso que aplica os limites das regras (`firestoreRepository.test.ts`); não testado contra o Firebase real.
   - Pendências no console: publicar `firestore.rules` e rodar `npm run seed:shop` (sem `shop/*` toda compra é recusada).
 - [x] **Fase 6 — Deploy:** GitHub Actions + Pages, App Check, acabamento da página.
@@ -489,12 +517,16 @@ Trabalhar **uma fase por vez**. Ao concluir, marcar `[x]` aqui e resumir o que f
   - Desempenho do build (2026-11-22, gzip): carga inicial ≈ 56 KB (JS 48,2 + CSS 4,9 + HTML 2,5 + `boot.css`). Firebase fora do bundle inicial, em chunks dinâmicos pedidos logo após a inicialização, sem bloquear a primeira tela: núcleo 11,4, Auth 36,6, Firestore lite 39,0, App Check 5,5 (≈ 92 KB). O script do reCAPTCHA vem do Google, também em segundo plano. Nenhum `modulepreload` do Firebase no HTML; a ativação do debug token não entra no build de produção.
   - Pendências no console: registrar o app no App Check com a chave secreta do reCAPTCHA, registrar o debug token de desenvolvimento, criar o secret `VITE_RECAPTCHA_SITE_KEY` no GitHub e, depois de conferir as métricas, aplicar a imposição no Firestore e no Authentication.
 - [x] **Arte dos canhões (fora das fases, 2026-11-22):** os 4 canhões redesenhados em camadas (§7 "Canhão"), com o mesmo tamanho e a mesma boca; giro por mola, recuo por cano, clarão/faíscas/fumaça na boca, núcleo ligado ao combo e ao EMP. Revisado com as pranchas de `npm run share:images -- --cannons` e no jogo real (Edge headless). A imagem de compartilhamento foi regerada com o canhão novo. Custo: JS inicial 48,2 → 53,3 KB gzip.
-- [ ] **Fase 7 — Extras:** Desafio Diário (feito), boss (feito), conquistas, coleções, suporte mobile.
+- [ ] **Fase 7 — Extras:** Desafio Diário (feito), boss (feito), progressão com conquistas e coleções (feito), suporte mobile.
   - **Desafio Diário** (2026-11-22; §6 Modos, §8 "Bônus do Desafio Diário", §9 Ranking): modo `daily`, envio com `mode` 'daily' e `day = dayIndex()`, aba "Diário", contagem no card do menu e no ranking, bônus por posição. `firestore.rules` não mudou.
   - Testado com servidores falsos que aplicam os limites das regras, com o `App` completo no Edge headless (virada do dia com a tela aberta e no meio da partida, data do aparelho errada, dois bônus em sequência, fora do top 50, anônimo, build offline, 360 px) e conferindo o que o SDK do Firestore envia (com `fetch` simulado). Não testado contra o Firebase real.
   - Junto: o menu mais alto que a tela (celular) rola desde o topo (`justify-content: safe center`); antes, conta e saldo ficavam inalcançáveis.
   - **Boss** (2026-11-22; §6 "Boss", §7 "Boss"): logo após cada 5ª onda. `firestore.rules` e a sequência de palavras não mudaram. Simulado com digitadores de várias velocidades nas 3 dificuldades e conferido no jogo real (Edge headless: alerta, teclas no alerta, fragmentos, EMP, derrota, −2 HP, fim de partida, pausa, reinício, "Reduzir efeitos", Zen, 360 px, 1366×640, 1920×1080). JS inicial 56,6 → ~63 KB gzip.
   - Publicar o boss no meio do dia mistura, no quadro do Diário, partidas com e sem ele: publicar logo após as 00:00 de Brasília.
+  - **Progressão** (2026-11-22; §8 "Progressão", §9): XP, níveis e baús, missões, streak, conquistas, coleções e títulos, WPM de rajada, tela Progresso. `firestore.rules` ganhou `isUnlock()` (mudança aprovada); o resto usa o `isReward()` que já existia. 5 itens de conquista no catálogo e no seed.
+  - Testado: as regras no **emulador do Firestore** (31 casos, com as regras antigas e novas); o código real do cliente (SDK + `FirestoreInventoryRepository` + `Economy`) contra o emulador com as regras do repositório e os documentos do seed, inclusive as esperas reais de 30 s; o `App` no Edge headless em build offline (virada do dia no menu, na partida e na tela Progresso, sequência quebrada, Zen, teclado, rajada com teclas reais, inglês, 360 px, 1366×640). Não testado contra o Firebase real.
+  - JS inicial 62,7 → 73,5 KB gzip; CSS 5,5 → 6,3 KB.
+  - Pendências no console, **nesta ordem**: publicar `firestore.rules`, rodar `npm run seed:shop`, publicar o jogo. Fora de ordem nada se perde: os itens de conquista só esperam para ser liberados.
 
 ---
 

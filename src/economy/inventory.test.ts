@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { DEFAULT_ITEM_IDS } from '../cosmetics/catalog.ts';
+import { COLLECTIONS } from '../cosmetics/collections.ts';
 import {
   applyPurchase,
+  applyUnlock,
   checkPurchase,
   emptyInventory,
   equip,
   equippedId,
+  equipTitle,
   grantCoins,
   isEquipped,
   isOwned,
@@ -88,6 +91,55 @@ describe('purchase', () => {
       equipped: {},
       lastPurchase: 'cannon_halo',
     });
+  });
+});
+
+describe('achievement items', () => {
+  it('are released free, and recorded as the last item owned', () => {
+    expect(applyUnlock(rich(50), 'cannon_golden')).toEqual({
+      coins: 50,
+      owned: { cannon_golden: true },
+      equipped: {},
+      lastPurchase: 'cannon_golden',
+    });
+  });
+
+  it('are never for sale, even if a shop listed them', () => {
+    expect(purchase(rich(), SHOP, 'cannon_golden')).toEqual({ ok: false, error: 'notForSale' });
+  });
+
+  it('survive a reload', () => {
+    const inv = { ...applyUnlock(rich(), 'theme_eclipse'), equipped: { theme: 'theme_eclipse' } };
+    expect(parseInventory(JSON.parse(JSON.stringify(inv)))).toEqual(inv);
+  });
+});
+
+describe('titles', () => {
+  const aurora = COLLECTIONS[0];
+  if (!aurora) throw new Error('no collections');
+  const owned = Object.fromEntries(aurora.items.map((item) => [item.id, true as const]));
+  const complete: Inventory = { ...rich(), owned, equipped: { theme: 'theme_aurora' } };
+
+  it('are worn with the whole collection, next to the rest', () => {
+    const result = equipTitle(complete, aurora.titleId);
+    expect(result.ok && result.inventory.equipped).toEqual({ theme: 'theme_aurora', title: aurora.titleId });
+  });
+
+  it('can be taken off', () => {
+    const result = equipTitle({ ...complete, equipped: { ...complete.equipped, title: aurora.titleId } }, null);
+    expect(result.ok && result.inventory.equipped).toEqual({ theme: 'theme_aurora' });
+  });
+
+  it('are refused without the whole collection, or when unknown', () => {
+    expect(equipTitle(rich(), aurora.titleId)).toEqual({ ok: false, error: 'notOwned' });
+    expect(equipTitle(complete, 'title_nope')).toEqual({ ok: false, error: 'notOwned' });
+  });
+
+  it('survive a reload only with the whole collection', () => {
+    const worn = { ...complete, equipped: { title: aurora.titleId } };
+    expect(parseInventory(worn).equipped).toEqual({ title: aurora.titleId });
+    expect(parseInventory({ ...worn, owned: {} }).equipped).toEqual({});
+    expect(parseInventory({ ...worn, equipped: { title: 'title_nope' } }).equipped).toEqual({});
   });
 });
 

@@ -17,6 +17,8 @@ export interface MatchReport {
   readonly lost: number;
   readonly accuracy: number;
   readonly wpm: number;
+  /** Best typing speed of a few words in a row, waits excluded (game/burst.ts). */
+  readonly burst: number;
   readonly defense: number;
   readonly maxCombo: number;
   readonly wave: number;
@@ -46,6 +48,7 @@ export function buildReport(state: Readonly<MatchState>): MatchReport {
     lost: stats.breaches,
     accuracy,
     wpm,
+    burst: state.burst.best,
     defense,
     maxCombo: state.combo.maxCombo,
     wave: Math.max(1, state.wave),

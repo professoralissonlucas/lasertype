@@ -3,6 +3,7 @@ import { CONFIG } from '../config.ts';
 import { MODES } from '../modes/index.ts';
 import type { ModeRules } from '../modes/types.ts';
 import { bossBonus, createBoss } from './boss.ts';
+import { burstLetter, burstWord, createBurst, type BurstState } from './burst.ts';
 import { INITIAL_COMBO, isEmpReady, updateCombo, type ComboState } from './combo.ts';
 import type { Boss } from './entities/Boss.ts';
 import { lettersOf, type Word } from './entities/Word.ts';
@@ -66,6 +67,8 @@ export interface MatchState {
   slowTimer: number;
   endReason: EndReason | null;
   readonly stats: MatchStats;
+  /** Typing speed of the words typed in a row. */
+  readonly burst: BurstState;
 }
 
 export interface MatchOptions {
@@ -96,6 +99,7 @@ export function createMatchState(options: MatchOptions = {}): MatchState {
     slowTimer: 0,
     endReason: null,
     stats: { destroyed: 0, hits: 0, misses: 0, breaches: 0, empUses: 0, bosses: 0 },
+    burst: createBurst(),
   };
 }
 
@@ -258,6 +262,7 @@ export function typeChar(
 
   const word = outcome.word;
   state.stats.hits++;
+  burstLetter(state.burst, state.elapsed, outcome.newLock);
   if (outcome.newLock) {
     state.lockedId = word.id;
     events.push({ type: 'lock', wordId: word.id });
@@ -306,9 +311,11 @@ function typeBoss(state: MatchState, boss: Boss, char: string, options: TypingOp
   }
 
   state.stats.hits++;
+  burstLetter(state.burst, state.elapsed, boss.typed === 0);
   events.push({ type: 'bossHit', boss, word: boss.index, index: boss.typed });
   boss.typed++;
   if (boss.typed < text.length) return;
+  burstWord(state.burst, state.elapsed);
 
   const multiplierBefore = comboMultiplier(state.combo.combo);
   const wasReady = isEmpReady(state.combo.charge);
@@ -353,6 +360,7 @@ function removeWord(state: MatchState, word: Word): void {
 
 function destroyByTyping(state: MatchState, word: Word, events: GameEvent[]): void {
   removeWord(state, word);
+  burstWord(state.burst, state.elapsed);
 
   const multiplierBefore = comboMultiplier(state.combo.combo);
   const wasReady = isEmpReady(state.combo.charge);

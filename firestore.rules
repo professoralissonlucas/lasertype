@@ -95,6 +95,19 @@ service cloud.firestore {
         && incoming().coins >= 0;
     }
 
+    // Conquista: exatamente 1 item novo (= lastPurchase), marcado com achievement: true
+    // em shop/{id}, sem custo (coins não pode mudar)
+    function isUnlock() {
+      let id = incoming().lastPurchase;
+      let ownedDiff = incoming().owned.diff(existing().owned);
+      return changed().hasOnly(['owned', 'lastPurchase'])
+        && id is string
+        && ownedDiff.affectedKeys().size() == 1
+        && ownedDiff.addedKeys().hasOnly([id])
+        && incoming().owned[id] == true
+        && shopItem(id).achievement == true;
+    }
+
     // Equipar: só o mapa equipped (cosmético; não validado item a item)
     function isEquip() {
       return changed().hasOnly(['equipped'])
@@ -129,7 +142,7 @@ service cloud.firestore {
         && incoming().lastReward == request.time;
 
       allow update: if isOwner(uid)
-        && (isReward() || isPurchase() || isEquip() || isProfile());
+        && (isReward() || isUnlock() || isPurchase() || isEquip() || isProfile());
 
       allow delete: if false;
     }

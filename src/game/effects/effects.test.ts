@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { getItem } from '../../cosmetics/catalog.ts';
+import { getItem, itemsOfType } from '../../cosmetics/catalog.ts';
 import type { ExplosionParams } from '../../cosmetics/types.ts';
 import { createRng } from '../../utils/rng.ts';
 import { createBoss } from '../boss.ts';
@@ -431,7 +431,7 @@ describe('cosmetic explosions', () => {
   });
 
   it('every catalog explosion settles and never overflows a small pool', () => {
-    for (const id of ['explosion_fragment', 'explosion_supernova', 'explosion_disintegrate', 'explosion_implosion']) {
+    for (const { id } of itemsOfType('explosion')) {
       const small = new ParticlePool(6);
       emitExplosion(small, createRng(15), 'paralelepípedo', 0, 10, 0, 1, style(id));
       expect(small.items).toHaveLength(6);

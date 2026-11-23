@@ -1,20 +1,24 @@
-// Economy types. The inventory mirrors the `users/{uid}` fields of Firestore (coins, owned,
+// Economy types (XP, missions, streak: progression/types.ts). The inventory mirrors the `users/{uid}` fields of Firestore (coins, owned,
 // equipped, lastPurchase); repository.ts decides where it lives (localStorage in offline
 // builds, Firestore with a localStorage cache in online builds).
 import type { CosmeticType, Rarity } from '../cosmetics/types.ts';
 import type { Grade } from '../game/types.ts';
 import type { ModeId } from '../modes/types.ts';
+import type { Achievement } from '../progression/achievements.ts';
+import type { MissionView } from '../progression/missions.ts';
+import type { Award } from '../progression/types.ts';
+import type { LevelProgress, XpReward } from '../progression/xp.ts';
 import type { Language } from '../words/types.ts';
 
-/** Missing type = the default item of that category. */
-export type Equipped = Readonly<Partial<Record<CosmeticType, string>>>;
+/** Missing type = the default item of that category; missing title = none. */
+export type Equipped = Readonly<Partial<Record<CosmeticType | 'title', string>>>;
 
 export interface Inventory {
   readonly coins: number;
-  /** Bought items only: default items (price 0) are always owned and never listed. */
+  /** Bought or unlocked items: default items (price 0) are always owned and never listed. */
   readonly owned: Readonly<Record<string, true>>;
   readonly equipped: Equipped;
-  /** Last item bought (the Firestore purchase rule checks it). */
+  /** Last item that entered `owned` (the Firestore purchase and unlock rules check it). */
   readonly lastPurchase: string | null;
 }
 
@@ -58,6 +62,13 @@ export type PurchaseError =
   | 'busy'
   | BackendPurchaseError;
 
+/** Why an achievement item was not released now (it is tried again later). */
+export type UnlockError =
+  /** The server rules refused the write. */
+  | 'refused'
+  /** No connection to the server (or not signed in yet). */
+  | 'offline';
+
 export type EquipError = 'unknown' | 'notOwned';
 
 export type Result<E> = { readonly ok: true; readonly inventory: Inventory } | { readonly ok: false; readonly error: E };
@@ -73,11 +84,35 @@ export interface MatchReward {
   readonly total: number;
 }
 
-/** Every change, typed. Each local one becomes exactly one rule-checked write in the cloud. */
+/** Everything a finished match brought, for the Mission Report. */
+export interface MatchOutcome {
+  readonly coins: MatchReward;
+  readonly xp: XpReward;
+  /** Where the level bar was and where it is now. */
+  readonly before: LevelProgress;
+  readonly after: LevelProgress;
+  /** Level-up chests (one per level reached). */
+  readonly chests: readonly Extract<Award, { type: 'chest' }>[];
+  /** Today's missions after the match. */
+  readonly missions: readonly MissionView[];
+  /** Slots of the missions this match completed. */
+  readonly completed: readonly number[];
+  /** Achievements this match reached. */
+  readonly achievements: readonly Achievement[];
+}
+
+/** Every change, typed. Each local one becomes exactly one kind of rule-checked write in the cloud. */
 export type EconomyChange =
+  /** A match: `amount` = its coins (chests and missions not included), plus XP and missions. */
   | { readonly type: 'reward'; readonly amount: number }
+  /** First visit of a game day. */
+  | { readonly type: 'login'; readonly streak: number; readonly coins: number }
   | { readonly type: 'purchase'; readonly itemId: string; readonly price: number }
+  /** An achievement item is now owned. */
+  | { readonly type: 'unlock'; readonly itemId: string }
   | { readonly type: 'equip'; readonly itemType: CosmeticType; readonly itemId: string }
+  /** null = no title. */
+  | { readonly type: 'title'; readonly titleId: string | null }
   /** Replaced by the backend's version (cloud load, another device, account switch). */
   | { readonly type: 'sync' };
 
@@ -109,6 +144,8 @@ export interface DailyBonusConfig {
 export interface SyncConfig {
   /** Most coins one reward write may add. */
   readonly maxRewardPerWrite: number;
+  /** Most XP one reward write may add. */
+  readonly maxXpPerWrite: number;
   /** Minimum time between two reward writes. */
   readonly rewardIntervalSeconds: number;
   readonly rewardMarginMs: number;

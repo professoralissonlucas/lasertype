@@ -21,7 +21,9 @@ export type SoundName =
   | 'bossWord'
   | 'bossDown'
   | 'purchase'
-  | 'equip';
+  | 'equip'
+  | 'levelUp'
+  | 'achievement';
 
 /** Attack-then-exponential-release volume envelope. Times in seconds. */
 export interface Envelope {

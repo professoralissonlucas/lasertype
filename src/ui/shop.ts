@@ -7,9 +7,11 @@ import { withItem } from '../cosmetics/equip.ts';
 import { COSMETIC_TYPES, type CosmeticItem, type CosmeticType, type ResolvedCosmetics } from '../cosmetics/types.ts';
 import type { Economy } from '../economy/Economy.ts';
 import type { PurchaseError, ShopOffer } from '../economy/types.ts';
+import { achievementFor } from '../progression/achievements.ts';
 import { formatCountdown } from '../utils/format.ts';
 import type { Language } from '../words/types.ts';
 import { button, el } from './dom.ts';
+import { achievementDescription } from './progressText.ts';
 import { RARITY_LABEL, TYPE_LABEL, type Translate } from './i18n.ts';
 import { itemAction, itemSwatch } from './shopModel.ts';
 import { ShopPreview } from './shopPreview.ts';
@@ -433,7 +435,7 @@ export class ShopScreen {
     if (equipped) card.status.replaceChildren(t('shopEquipped'));
     else if (owned) card.status.replaceChildren(t(card.item.price === 0 ? 'shopDefault' : 'shopOwned'));
     else if (offer) card.status.replaceChildren(this.priceTag(offer));
-    else card.status.replaceChildren(t('shopLocked'));
+    else card.status.replaceChildren(t(achievementFor(id) ? 'shopAchievement' : 'shopLocked'));
   }
 
   private refresh(): void {
@@ -489,6 +491,10 @@ export class ShopScreen {
         this.actionLabel.textContent = t('shopMissing', { n: formatNumber(action.missing) });
         button.disabled = true;
         break;
+      case 'achievement':
+        this.actionLabel.textContent = t('shopAchievementOnly');
+        button.disabled = true;
+        break;
       case 'unavailable':
         this.actionLabel.textContent = t('shopUnavailable');
         button.disabled = true;
@@ -502,6 +508,8 @@ export class ShopScreen {
       const tag = this.priceTag(offer);
       if (offer.discounted) tag.prepend(el('span', 'price__deal', t('shopDeal')));
       this.detailPrice.replaceChildren(tag);
+    } else if (action.kind === 'achievement') {
+      this.detailPrice.replaceChildren(achievementDescription(t, action.achievement));
     } else {
       this.detailPrice.replaceChildren(t('shopLocked'));
     }

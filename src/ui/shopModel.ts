@@ -3,12 +3,15 @@ import { getItem } from '../cosmetics/catalog.ts';
 import type { CosmeticItem } from '../cosmetics/types.ts';
 import { isEquipped, isOwned } from '../economy/inventory.ts';
 import type { DailyShop, Inventory, ShopOffer } from '../economy/types.ts';
+import { achievementFor, type Achievement } from '../progression/achievements.ts';
 
 export type ItemAction =
   | { readonly kind: 'equipped' }
   | { readonly kind: 'equip' }
   | { readonly kind: 'buy'; readonly offer: ShopOffer }
   | { readonly kind: 'insufficient'; readonly offer: ShopOffer; readonly missing: number }
+  /** Not owned and never sold. */
+  | { readonly kind: 'achievement'; readonly achievement: Achievement }
   /** Not owned and not in today's shop. */
   | { readonly kind: 'unavailable' };
 
@@ -16,6 +19,8 @@ export type ItemAction =
 export function itemAction(itemId: string, inventory: Inventory, shop: DailyShop): ItemAction {
   if (isEquipped(inventory, itemId)) return { kind: 'equipped' };
   if (isOwned(inventory, itemId)) return { kind: 'equip' };
+  const achievement = achievementFor(itemId);
+  if (achievement) return { kind: 'achievement', achievement };
   const offer = shop.offers.find((entry) => entry.itemId === itemId);
   if (!offer || !getItem(itemId)) return { kind: 'unavailable' };
   const missing = offer.price - inventory.coins;

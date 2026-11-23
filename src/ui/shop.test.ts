@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CATALOG, DEFAULT_ITEM_IDS } from '../cosmetics/catalog.ts';
 import { emptyInventory } from '../economy/inventory.ts';
 import type { DailyShop, Inventory } from '../economy/types.ts';
+import { achievementFor } from '../progression/achievements.ts';
 import { PreviewScript, type PreviewCue } from './previewScript.ts';
 import { itemAction, itemSwatch } from './shopModel.ts';
 
@@ -31,6 +32,14 @@ describe('itemAction', () => {
 
   it('not owned and not in the shop → unavailable', () => {
     expect(itemAction('cannon_halo', inv({ coins: 99_999 }), SHOP)).toEqual({ kind: 'unavailable' });
+  });
+
+  it('achievement item → how to get it, then equip', () => {
+    expect(itemAction('cannon_golden', inv({ coins: 99_999 }), SHOP)).toEqual({
+      kind: 'achievement',
+      achievement: achievementFor('cannon_golden'),
+    });
+    expect(itemAction('cannon_golden', inv({ owned: { cannon_golden: true } }), SHOP)).toEqual({ kind: 'equip' });
   });
 });
 

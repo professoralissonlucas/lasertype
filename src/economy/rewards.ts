@@ -1,4 +1,4 @@
-// Coins per match (pure). Missions, streak and XP: only their users/{uid} fields exist so far.
+// Coins per match (pure). Chests, missions and the login streak: progression/.
 import { CONFIG } from '../config.ts';
 import type { Grade } from '../game/types.ts';
 import type { ModeId } from '../modes/types.ts';

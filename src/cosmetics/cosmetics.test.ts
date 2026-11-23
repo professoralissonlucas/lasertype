@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { CONFIG } from '../config.ts';
 import { PALETTE } from '../game/render/palette.ts';
 import { LANGUAGES } from '../words/types.ts';
-import { CATALOG, DEFAULT_ITEM_IDS, DISCOUNT_ORDER, getItem, isPurchasable, itemsOfType } from './catalog.ts';
+import { CATALOG, DEFAULT_ITEM_IDS, DISCOUNT_ORDER, getItem, isAchievementItem, isPurchasable, itemsOfType } from './catalog.ts';
 import { DEFAULT_COSMETICS, resolveCosmetics, withItem } from './equip.ts';
 import { COSMETIC_TYPES, type CosmeticItem } from './types.ts';
 
@@ -17,15 +17,25 @@ function colorsOf(value: unknown, out: string[] = []): string[] {
 }
 
 describe('catalog', () => {
-  it('has 4 items per category, the first one being the free default', () => {
+  it('has per category the free default first, 3 items on sale and 1 achievement item last', () => {
     for (const type of COSMETIC_TYPES) {
       const items = itemsOfType(type);
-      expect(items, type).toHaveLength(4);
+      expect(items, type).toHaveLength(5);
       expect(items[0]?.price, type).toBe(0);
       expect(items[0]?.id).toBe(DEFAULT_ITEM_IDS[type]);
       expect(items.filter((item) => item.price === 0), type).toHaveLength(1);
+      expect(items.slice(1, 4).every(isPurchasable), type).toBe(true);
+      expect(items[4] && isAchievementItem(items[4]), type).toBe(true);
     }
-    expect(CATALOG).toHaveLength(COSMETIC_TYPES.length * 4);
+    expect(CATALOG).toHaveLength(COSMETIC_TYPES.length * 5);
+  });
+
+  it('achievement items can never be on sale', () => {
+    for (const item of CATALOG.filter(isAchievementItem)) {
+      expect(isPurchasable(item), item.id).toBe(false);
+      expect(DISCOUNT_ORDER).not.toContain(item.id);
+      expect(item.unlock, item.id).toBeTruthy();
+    }
   });
 
   it('has unique ids and finds items by id', () => {
@@ -110,8 +120,10 @@ describe('withItem', () => {
 describe('cannons', () => {
   const cannons = itemsOfType('cannon');
 
-  it('each has its own body; only the twin has two barrels', () => {
-    expect(new Set(cannons.map((item) => item.params.body)).size).toBe(cannons.length);
+  it('each has its own body (the golden one is the Sentinel in gold, with another barrel); only the twin has two barrels', () => {
+    const plain = cannons.filter((item) => !isAchievementItem(item));
+    expect(new Set(plain.map((item) => item.params.body)).size).toBe(plain.length);
+    expect(new Set(cannons.map(({ params }) => `${params.body}+${params.barrel}`)).size).toBe(cannons.length);
     for (const item of cannons) {
       const { params } = item;
       expect(params.opacity, item.id).toBeGreaterThan(0);

@@ -3,23 +3,41 @@
 // (lasertype.inventory.v1) is not migrated.
 // - First session of an account: users/{uid} is created (coins 0, owned {}, lastReward =
 //   serverTimestamp(), name "Piloto" + 4 digits).
-// - Rewards are shown at once and queued as pending; each reward write sends at most 150
-//   coins and goes 30 s after the previous one (the rules' limits), so nothing is lost.
+// - Rewards (coins, XP, missions, streak) are shown at once and queued. A reward write carries
+//   everything queued, pays at most 150 coins and goes 30 s after the previous one (the rules'
+//   limits); what is beyond that stays owed in the document itself, so nothing is lost.
+// - What is sent is frozen as a batch with an id: if the answer gets lost, the batch is found
+//   in the document and is not applied again.
 // - Daily Challenge bonuses wait in their own queue: each one is a reward write of its own (it
 //   also records the day paid) and counts only once the server accepted it.
-// - Purchases run in a transaction and count only once the server accepted them.
+// - Purchases and unlocks run in a transaction and count only once the server accepted them.
 // - Equip and nickname changes apply at once; they are written in the background (retried).
 // - Every write goes through one queue (one at a time) and is exactly one kind of change.
 import { CONFIG } from '../config.ts';
 import { errorCode } from '../firebase/auth.ts';
-import type { UserBackend, UserSnapshot } from '../firebase/profile.ts';
+import type { RewardBatch, UserBackend, UserSnapshot } from '../firebase/profile.ts';
 import { defaultNickname, isValidNickname } from '../profile/nickname.ts';
+import {
+  applyGain,
+  emptyGain,
+  emptyProgress,
+  isEmptyGain,
+  loginGain,
+  mergeGain,
+  parseGain,
+  parseProgress,
+  sameProgress,
+  takeGain,
+} from '../progression/progress.ts';
+import { claimLogin, type LoginReward } from '../progression/streak.ts';
+import type { Progress, ProgressGain } from '../progression/types.ts';
 import { dayIndex } from '../utils/day.ts';
+import { uniqueId } from '../utils/id.ts';
 import { loadJson, saveJson, type KeyValueStore } from '../utils/storage.ts';
 import { parseDailyBonus, type DailyBonus } from './dailyBonus.ts';
 import type { BonusAccount } from './DailyBonusCollector.ts';
 import { emptyInventory, parseInventory, sameEquipped, sameInventory } from './inventory.ts';
-import type { InventoryRepository, RepositoryListener, RepositoryPurchase } from './repository.ts';
+import type { InventoryRepository, RepositoryListener, RepositoryPurchase, RepositoryUnlock } from './repository.ts';
 import type { Equipped, Inventory, SyncConfig } from './types.ts';
 
 /** Bump the version when the shape changes incompatibly. */
@@ -32,8 +50,13 @@ const NO_ACCOUNT = '';
 interface CachedUser {
   /** As confirmed by the server: coins WITHOUT the pending ones; `equipped` is the local choice. */
   inventory: Inventory;
-  /** Coins earned and shown, not accepted by the server yet. */
+  /** As confirmed by the server. */
+  progress: Progress;
+  /** Match coins and progress earned and shown, not sent to the server yet. */
   pending: number;
+  gain: ProgressGain;
+  /** On its way to the server (kept until it is known to have arrived). */
+  batch: RewardBatch | null;
   /** Daily Challenge bonuses not accepted by the server yet, oldest day first (not in `coins`). */
   bonuses: readonly DailyBonus[];
   /** Last closed Daily Challenge day already settled for this account; null = none. */
@@ -50,7 +73,10 @@ interface CachedUser {
 function blankUser(): CachedUser {
   return {
     inventory: emptyInventory(),
+    progress: emptyProgress(),
     pending: 0,
+    gain: emptyGain(),
+    batch: null,
     bonuses: [],
     dailySettled: null,
     equipDirty: false,
@@ -64,13 +90,24 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
+function wholeCoins(value: unknown): number {
+  return typeof value === 'number' && Number.isFinite(value) ? Math.floor(Math.max(0, value)) : 0;
+}
+
+function parseBatch(raw: unknown): RewardBatch | null {
+  if (!isRecord(raw) || typeof raw.id !== 'string' || raw.id === '') return null;
+  return { id: raw.id, coins: wholeCoins(raw.coins), gain: parseGain(raw.gain) };
+}
+
 function parseUser(raw: unknown): CachedUser {
   const d = isRecord(raw) ? raw : {};
   const name = typeof d.name === 'string' && isValidNickname(d.name) ? d.name : null;
-  const pending = typeof d.pending === 'number' && Number.isFinite(d.pending) ? Math.floor(Math.max(0, d.pending)) : 0;
   return {
     inventory: parseInventory(d.inventory),
-    pending,
+    progress: parseProgress(d.progress),
+    pending: wholeCoins(d.pending),
+    gain: parseGain(d.gain),
+    batch: parseBatch(d.batch),
     bonuses: (Array.isArray(d.bonuses) ? d.bonuses : []).flatMap((entry) => parseDailyBonus(entry) ?? []),
     dailySettled: typeof d.dailySettled === 'number' && Number.isInteger(d.dailySettled) ? d.dailySettled : null,
     equipDirty: d.equipDirty === true,
@@ -94,6 +131,12 @@ function parseCache(raw: unknown): { readonly last: string; readonly users: Map<
 type Timer = ReturnType<typeof setTimeout>;
 
 export type BonusListener = (bonus: DailyBonus) => void;
+
+/** What the player sees of an account. */
+interface View {
+  readonly inventory: Inventory;
+  readonly progress: Progress;
+}
 
 export interface FirestoreRepositoryOptions {
   readonly store: KeyValueStore | null;
@@ -143,17 +186,30 @@ export class FirestoreInventoryRepository implements InventoryRepository, BonusA
   // ---------- InventoryRepository ----------
 
   load(): Inventory {
-    return this.visible();
+    return this.view().inventory;
   }
 
-  reward(amount: number): Inventory {
-    const coins = Number.isFinite(amount) ? Math.floor(Math.max(0, amount)) : 0;
-    if (coins > 0) {
+  progress(): Progress {
+    return this.view().progress;
+  }
+
+  reward(amount: number, gain: ProgressGain = emptyGain()): Inventory {
+    const coins = wholeCoins(amount);
+    if (coins > 0 || !isEmptyGain(gain)) {
       this.user.pending += coins;
+      this.user.gain = mergeGain(this.user.gain, gain);
       this.persist();
       this.scheduleReward();
     }
-    return this.visible();
+    return this.load();
+  }
+
+  /** Only once users/{uid} was read this session: the streak depends on the server's last login. */
+  login(day: number): LoginReward | null {
+    if (!this.ready) return null;
+    const login = claimLogin(this.progress(), day);
+    if (login) this.reward(0, loginGain(day));
+    return login;
   }
 
   purchase(itemId: string, price: number): Promise<RepositoryPurchase> {
@@ -167,17 +223,39 @@ export class FirestoreInventoryRepository implements InventoryRepository, BonusA
         this.open(); // try to reconnect for the next attempt
         return offline;
       }
-      const before = this.visible();
+      const before = this.view();
       try {
         const backend = await this.backend();
         const attempt = await backend.purchase(uid, itemId, price);
         this.merge(user, attempt.snapshot, false);
         this.persist();
         if (uid !== this.uid) return offline;
-        if (attempt.kind === 'bought') return { ok: true, inventory: this.visible() };
+        if (attempt.kind === 'bought') return { ok: true, inventory: this.load() };
         this.emitIfChanged(before);
-        if (attempt.kind === 'insufficient' && user.pending > 0) return { ok: false, error: 'syncing' };
+        if (attempt.kind === 'insufficient' && this.pendingCoins > 0) return { ok: false, error: 'syncing' };
         return { ok: false, error: attempt.kind };
+      } catch (error) {
+        if (errorCode(error) === 'permission-denied') return { ok: false, error: 'refused' };
+        if (uid === this.uid) this.connectionLost();
+        return offline;
+      }
+    });
+  }
+
+  unlock(itemId: string): Promise<RepositoryUnlock> {
+    const uid = this.uid;
+    const user = this.user;
+    const offline: RepositoryUnlock = { ok: false, error: 'offline' };
+    // Not read yet: opening the account will announce itself, and the unlock comes back then.
+    if (!uid || !this.ready) return Promise.resolve(offline);
+    return this.enqueue(async (): Promise<RepositoryUnlock> => {
+      if (uid !== this.uid || !this.ready) return offline;
+      try {
+        const backend = await this.backend();
+        const attempt = await backend.unlock(uid, itemId);
+        this.merge(user, attempt.snapshot, false);
+        this.persist();
+        return uid === this.uid ? { ok: true, inventory: this.load() } : offline;
       } catch (error) {
         if (errorCode(error) === 'permission-denied') return { ok: false, error: 'refused' };
         if (uid === this.uid) this.connectionLost();
@@ -191,7 +269,7 @@ export class FirestoreInventoryRepository implements InventoryRepository, BonusA
     this.user.equipDirty = true;
     this.persist();
     this.flushEquip();
-    return this.visible();
+    return this.load();
   }
 
   subscribe(listener: RepositoryListener): () => void {
@@ -231,9 +309,9 @@ export class FirestoreInventoryRepository implements InventoryRepository, BonusA
     return this.user.name ?? defaultNickname(this.key);
   }
 
-  /** Coins earned but not accepted by the server yet. */
+  /** Coins earned and shown, but not in the server's balance yet. */
   get pendingCoins(): number {
-    return this.user.pending;
+    return this.load().coins - this.user.inventory.coins;
   }
 
   /**
@@ -258,6 +336,7 @@ export class FirestoreInventoryRepository implements InventoryRepository, BonusA
       // Progress made before any account answered belongs to the first account that does.
       if (this.key === NO_ACCOUNT) {
         next.pending += previous.pending;
+        next.gain = mergeGain(next.gain, previous.gain);
         if (previous.equipDirty) {
           next.inventory = { ...next.inventory, equipped: previous.inventory.equipped };
           next.equipDirty = true;
@@ -322,6 +401,8 @@ export class FirestoreInventoryRepository implements InventoryRepository, BonusA
     const remote = snapshot.inventory;
     const equipped = user.equipDirty ? user.inventory.equipped : remote.equipped;
     user.inventory = parseInventory({ ...remote, equipped }); // drops equipped items not owned
+    user.progress = snapshot.progress;
+    if (user.batch && user.batch.id === snapshot.batch) user.batch = null; // it had arrived
     if (!user.nameDirty) user.name = snapshot.name ?? user.name;
     const lastReward = snapshot.lastReward ?? (created ? this.now() : null);
     if (lastReward !== null) user.nextRewardAt = Math.max(user.nextRewardAt, lastReward + this.rewardGapMs());
@@ -330,9 +411,24 @@ export class FirestoreInventoryRepository implements InventoryRepository, BonusA
     if (paid !== null && paid < dayIndex(this.now())) user.dailySettled = Math.max(user.dailySettled ?? paid, paid);
   }
 
+  /** Something to send, or coins owed that the next write can pay. */
+  private hasRewards({ pending, gain, batch, progress }: CachedUser): boolean {
+    return batch !== null || pending > 0 || progress.owed > 0 || !isEmptyGain(gain);
+  }
+
+  /** Freezes what is waiting (the XP up to a write's limit) as the next batch. */
+  private nextBatch(user: CachedUser): RewardBatch {
+    if (user.batch) return user.batch;
+    const { first, rest } = takeGain(user.gain, this.config.maxXpPerWrite);
+    user.batch = { id: uniqueId(), coins: user.pending, gain: first };
+    user.pending = 0;
+    user.gain = rest;
+    return user.batch;
+  }
+
   private scheduleReward(): void {
-    const { pending, bonuses } = this.user;
-    if (this.rewardTimer !== null || !this.ready || (pending <= 0 && bonuses.length === 0)) return;
+    if (this.rewardTimer !== null || !this.ready) return;
+    if (!this.hasRewards(this.user) && this.user.bonuses.length === 0) return;
     const delay = Math.max(0, this.user.nextRewardAt - this.now());
     this.rewardTimer = setTimeout(() => {
       this.rewardTimer = null;
@@ -340,31 +436,33 @@ export class FirestoreInventoryRepository implements InventoryRepository, BonusA
     }, delay);
   }
 
-  /** One reward write: the oldest Daily Challenge bonus, else up to maxRewardPerWrite of the pending coins. */
+  /** One reward write: the oldest Daily Challenge bonus, else everything that is waiting. */
   private sendReward(): void {
     const uid = this.uid;
     const user = this.user;
     if (!uid || !this.ready) return;
-    const amount = Math.min(user.pending, this.config.maxRewardPerWrite);
-    const bonus = this.bonusHeld && amount > 0 ? undefined : user.bonuses[0];
-    if (!bonus && amount <= 0) return;
+    const waiting = this.hasRewards(user);
+    const bonus = this.bonusHeld && waiting ? undefined : user.bonuses[0];
+    if (!bonus && !waiting) return;
     void this.enqueue(async () => {
-      const before = this.visible();
+      const before = this.view();
       let paid: DailyBonus | null = null;
       try {
         const backend = await this.backend();
         if (bonus) {
           if (await this.sendBonus(backend, uid, user, bonus)) paid = bonus;
         } else {
-          const snapshot = await backend.reward(uid, amount);
-          user.pending -= amount;
-          this.merge(user, snapshot, false);
-          user.nextRewardAt = this.now() + this.rewardGapMs();
+          const batch = this.nextBatch(user);
+          this.persist();
+          const attempt = await backend.reward(uid, batch);
+          user.batch = null;
+          this.merge(user, attempt.snapshot, false);
+          if (attempt.kind === 'written') user.nextRewardAt = this.now() + this.rewardGapMs();
         }
         this.rewardFailures = 0;
         this.bonusHeld = false;
       } catch {
-        // Refused (too soon for the server's clock) or no network: the coins stay pending.
+        // Refused (too soon for the server's clock) or no network: the batch stays and goes again.
         this.rewardFailures++;
         this.bonusHeld = bonus !== undefined;
         user.nextRewardAt = this.now() + Math.max(this.rewardGapMs(), this.retryDelay(this.rewardFailures));
@@ -472,10 +570,14 @@ export class FirestoreInventoryRepository implements InventoryRepository, BonusA
 
   // ---------- State ----------
 
-  /** What the player sees: the confirmed coins plus the pending ones. */
-  private visible(): Inventory {
-    const { inventory, pending } = this.user;
-    return { ...inventory, coins: inventory.coins + pending };
+  /** What the player sees: what the server confirmed plus everything on its way there. */
+  private view(): View {
+    const { inventory, pending, gain, batch } = this.user;
+    let { progress } = this.user;
+    if (batch) progress = applyGain(progress, batch.gain).progress;
+    if (!isEmptyGain(gain)) progress = applyGain(progress, gain).progress;
+    const coins = inventory.coins + progress.owed + (batch?.coins ?? 0) + pending;
+    return { inventory: { ...inventory, coins }, progress };
   }
 
   private entry(key: string): CachedUser {
@@ -490,18 +592,19 @@ export class FirestoreInventoryRepository implements InventoryRepository, BonusA
   private persist(): void {
     const users: Record<string, CachedUser> = {};
     for (const [key, user] of this.users) {
-      if (key !== NO_ACCOUNT || user.pending > 0 || user.equipDirty) users[key] = user;
+      if (key !== NO_ACCOUNT || this.hasRewards(user) || user.equipDirty) users[key] = user;
     }
     saveJson(this.store, CLOUD_CACHE_KEY, { last: this.key, users });
   }
 
   private emit(): void {
-    const inventory = this.visible();
+    const inventory = this.load();
     for (const listener of this.listeners) listener(inventory);
   }
 
-  private emitIfChanged(before: Inventory): void {
-    if (!sameInventory(before, this.visible())) this.emit();
+  private emitIfChanged(before: View): void {
+    const now = this.view();
+    if (!sameInventory(before.inventory, now.inventory) || !sameProgress(before.progress, now.progress)) this.emit();
   }
 
   private clearRetry(): void {

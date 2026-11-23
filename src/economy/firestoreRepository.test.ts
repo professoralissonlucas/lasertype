@@ -5,13 +5,22 @@ import {
   equipFields,
   profileFields,
   purchaseFields,
-  rewardFields,
+  rewardWrite,
+  unlockFields,
   type DailyBonusAttempt,
   type OpenedUser,
   type PurchaseAttempt,
+  type RewardAttempt,
+  type RewardBatch,
+  type UnlockAttempt,
   type UserBackend,
   type UserSnapshot,
 } from '../firebase/profile.ts';
+import { achievementFor } from '../progression/achievements.ts';
+import { emptyGain, emptyProgress, matchGain } from '../progression/progress.ts';
+import { dayWith, matchReport } from '../progression/testing.ts';
+import type { Progress } from '../progression/types.ts';
+import { chestCoins } from '../progression/xp.ts';
 import { defaultNickname } from '../profile/nickname.ts';
 import { dayIndex } from '../utils/day.ts';
 import { memoryStore } from '../utils/storage.ts';
@@ -22,6 +31,8 @@ import type { Equipped, Inventory } from './types.ts';
 
 const NOON = Date.parse('2026-11-22T12:00:00Z');
 const MAX = CONFIG.sync.maxRewardPerWrite;
+/** isReward → changed().hasOnly([...]) (rules.test.ts checks the real list). */
+const REWARD_FIELDS = ['coins', 'lastLogin', 'lastReward', 'level', 'stats', 'streak', 'xp'];
 const INTERVAL_MS = CONFIG.sync.rewardIntervalSeconds * 1000;
 
 const firestoreError = (code: string) => Object.assign(new Error(code), { code });
@@ -35,10 +46,13 @@ interface ServerDoc {
   lastReward: number;
   /** stats.dailyDay */
   dailyDay: number | null;
+  progress: Progress;
+  /** stats.batch */
+  batch: string | null;
 }
 
 interface Write {
-  readonly kind: 'create' | 'reward' | 'bonus' | 'purchase' | 'equip' | 'profile';
+  readonly kind: 'create' | 'reward' | 'bonus' | 'purchase' | 'unlock' | 'equip' | 'profile';
   readonly uid: string;
   /** Top-level fields the write touched. */
   readonly fields: readonly string[];
@@ -57,7 +71,11 @@ class FakeServer implements UserBackend {
   refuseBonuses = false;
   /** Commits the next bonus but loses the answer on the way back. */
   loseBonusAnswer = false;
+  /** The same for the next reward. */
+  loseRewardAnswer = false;
   refusePurchases = false;
+  /** The rules without isUnlock(). */
+  refuseUnlocks = false;
   private active = 0;
   maxActive = 0;
 
@@ -70,6 +88,8 @@ class FakeServer implements UserBackend {
       name: 'Servidor',
       lastReward: Date.now() - 3_600_000,
       dailyDay: null,
+      progress: emptyProgress(),
+      batch: null,
       ...doc,
     });
   }
@@ -87,7 +107,8 @@ class FakeServer implements UserBackend {
       equipped: { ...doc.equipped },
       lastPurchase: doc.lastPurchase,
     };
-    return { inventory, name: doc.name, lastReward: doc.lastReward, dailyDay: doc.dailyDay };
+    const { name, lastReward, dailyDay, progress, batch } = doc;
+    return { inventory, name, lastReward, dailyDay, progress, batch };
   }
 
   /** Every call takes a network round trip; counts overlapping calls. */
@@ -141,16 +162,38 @@ class FakeServer implements UserBackend {
     });
   }
 
-  reward(uid: string, amount: number): Promise<UserSnapshot> {
-    return this.call(() => {
+  reward(uid: string, batch: RewardBatch): Promise<RewardAttempt> {
+    return this.call((): RewardAttempt => {
       const doc = this.doc(uid);
       const now = Date.now();
-      this.checkReward(doc, amount, now);
-      const fields = rewardFields(doc.coins, amount, now);
-      doc.coins = fields.coins;
+      if (doc.batch === batch.id) return { kind: 'alreadyWritten', snapshot: this.snapshot(doc) };
+      const { fields, coins, progress, paid } = rewardWrite(doc, batch, now);
+      this.checkReward(doc, paid, now);
+      const xpGain = progress.xp - doc.progress.xp;
+      if (!Number.isInteger(xpGain) || xpGain < 0 || xpGain > 2000) throw firestoreError('permission-denied');
+      doc.coins = coins;
+      doc.progress = progress;
+      doc.batch = batch.id;
       doc.lastReward = now;
-      this.writes.push({ kind: 'reward', uid, fields: topLevel(fields), amount, at: now });
-      return { ...this.snapshot(doc), lastReward: null };
+      this.writes.push({ kind: 'reward', uid, fields: topLevel(fields), amount: paid, at: now });
+      if (this.loseRewardAnswer) {
+        this.loseRewardAnswer = false;
+        throw firestoreError('unavailable');
+      }
+      return { kind: 'written', snapshot: { ...this.snapshot(doc), lastReward: null } };
+    });
+  }
+
+  /** isUnlock: an achievement item, not owned yet; nothing else changes. */
+  unlock(uid: string, itemId: string): Promise<UnlockAttempt> {
+    return this.call((): UnlockAttempt => {
+      const doc = this.doc(uid);
+      if (doc.owned[itemId]) return { kind: 'owned', snapshot: this.snapshot(doc) };
+      if (this.refuseUnlocks || !achievementFor(itemId)) throw firestoreError('permission-denied');
+      doc.owned = { ...doc.owned, [itemId]: true };
+      doc.lastPurchase = itemId;
+      this.writes.push({ kind: 'unlock', uid, fields: topLevel(unlockFields(itemId)), at: Date.now() });
+      return { kind: 'unlocked', snapshot: this.snapshot(doc) };
     });
   }
 
@@ -259,7 +302,7 @@ describe('FirestoreInventoryRepository — rewards', () => {
     expect(server.doc('u1').coins).toBe(100);
     expect(repo.pendingCoins).toBe(0);
     expect(repo.load().coins).toBe(100);
-    expect(server.writes.at(-1)).toMatchObject({ kind: 'reward', fields: ['coins', 'lastReward'], amount: 100 });
+    expect(server.writes.at(-1)).toMatchObject({ kind: 'reward', fields: REWARD_FIELDS, amount: 100 });
   });
 
   it('splits big rewards into writes of at most 150, 30 s apart, losing nothing', async () => {
@@ -328,6 +371,257 @@ describe('FirestoreInventoryRepository — rewards', () => {
     repo.setUser('u1');
     await settle(INTERVAL_MS + 5000);
     expect(server.doc('u1').coins).toBe(50);
+  });
+});
+
+describe('FirestoreInventoryRepository — progression', () => {
+  const TODAY = dayIndex(NOON);
+  const xp = (amount: number) => ({ ...emptyGain(), xp: amount });
+
+  async function ready(doc: Partial<ServerDoc> = {}) {
+    const all = setup();
+    all.server.seed('u1', doc);
+    all.repo.setUser('u1');
+    await settle();
+    return all;
+  }
+
+  it('XP, chests and missions show at once and go with the coins in one reward write', async () => {
+    const { repo, server } = await ready();
+    const { day, mission } = dayWith('words');
+    const gain = matchGain(matchReport({ destroyed: mission.target, letters: 100, score: 0, maxCombo: 0, accuracy: 0, burst: 0, wave: 1, empUses: 0 }), day);
+    repo.reward(30, gain);
+    const earned = 30 + mission.coins + chestCoins(2);
+    expect(repo.load().coins).toBe(earned);
+    expect(repo.progress()).toMatchObject({ xp: 100 + 2 * mission.target, level: 2 });
+    await settle();
+    expect(server.writes).toEqual([{ kind: 'reward', uid: 'u1', fields: REWARD_FIELDS, amount: earned, at: NOON }]);
+    expect(server.doc('u1').coins).toBe(earned);
+    expect(server.doc('u1').progress).toMatchObject({ level: 2, owed: 0, stats: { games: 1 } });
+    expect(server.doc('u1').progress.missions?.paid[mission.slot]).toBe(true);
+    expect(repo.load().coins).toBe(earned);
+    expect(repo.pendingCoins).toBe(0);
+  });
+
+  it('what is beyond 150 stays owed in the document and is paid 30 s apart', async () => {
+    const { repo, server } = await ready();
+    repo.reward(100, xp(1400)); // levels 2 to 5
+    const earned = 100 + [2, 3, 4, 5].reduce((sum, level) => sum + chestCoins(level), 0);
+    expect(repo.load().coins).toBe(earned);
+    await settle();
+    expect(server.doc('u1').coins).toBe(150);
+    expect(server.doc('u1').progress.owed).toBe(earned - 150);
+    expect(repo.load().coins).toBe(earned);
+    await settle(10 * 60_000);
+    expect(server.doc('u1').coins).toBe(earned);
+    expect(server.doc('u1').progress.owed).toBe(0);
+    expect(repo.load().coins).toBe(earned);
+    for (const write of server.writes) expect(write.amount).toBeLessThanOrEqual(MAX);
+    for (let i = 1; i < server.writes.length; i++) {
+      expect((server.writes[i]?.at ?? 0) - (server.writes[i - 1]?.at ?? 0)).toBeGreaterThan(INTERVAL_MS);
+    }
+  });
+
+  it('coins owed are seen, and paid, by another device', async () => {
+    const { repo, server } = await ready();
+    repo.reward(0, xp(1400));
+    await settle();
+    repo.equip({}); // this device goes quiet from here
+    const owed = server.doc('u1').progress.owed;
+    expect(owed).toBeGreaterThan(0);
+    const other = new FirestoreInventoryRepository({ store: memoryStore(), backend: async () => server });
+    other.setUser('u1');
+    await settle();
+    expect(other.load().coins).toBe(150 + owed);
+    expect(other.progress().level).toBe(5);
+  });
+
+  it('coins still owed cannot be spent yet', async () => {
+    const { repo } = await ready();
+    repo.reward(0, xp(1400));
+    await settle();
+    expect(repo.load().coins).toBeGreaterThanOrEqual(210);
+    expect(await repo.purchase('laser_emerald', 210)).toEqual({ ok: false, error: 'syncing' });
+  });
+
+  it('a lost answer is not paid again, and nothing earned meanwhile is lost', async () => {
+    const { repo, server } = await ready();
+    server.loseRewardAnswer = true;
+    repo.reward(90, xp(150));
+    await settle();
+    expect(server.doc('u1').coins).toBe(90);
+    repo.reward(20, xp(30));
+    await settle(10 * 60_000);
+    expect(server.doc('u1').coins).toBe(110);
+    expect(server.doc('u1').progress.xp).toBe(180);
+    expect(repo.load().coins).toBe(110);
+    expect(repo.progress().xp).toBe(180);
+    expect(server.kinds()).toEqual(['reward', 'reward']);
+  });
+
+  it('a lost answer is noticed after a reload too', async () => {
+    const { repo, server, store } = await ready();
+    server.loseRewardAnswer = true;
+    repo.reward(90, xp(150));
+    await settle();
+    const next = new FirestoreInventoryRepository({ store, backend: async () => server });
+    expect(next.load().coins).toBe(90);
+    next.setUser('u1');
+    await settle(10 * 60_000);
+    expect(next.load().coins).toBe(90);
+    expect(next.progress().xp).toBe(150);
+    expect(server.doc('u1').coins).toBe(90);
+  });
+
+  it('two devices crossing the same level are paid one chest', async () => {
+    const { repo, server } = await ready({ progress: { ...emptyProgress(), xp: 190 } });
+    const other = new FirestoreInventoryRepository({ store: memoryStore(), backend: async () => server });
+    other.setUser('u1');
+    await settle();
+    repo.reward(0, xp(20));
+    other.reward(0, xp(20));
+    await settle(10 * 60_000);
+    expect(server.doc('u1').progress).toMatchObject({ xp: 230, level: 2 });
+    expect(server.doc('u1').coins).toBe(chestCoins(2));
+    expect(other.load().coins).toBe(chestCoins(2));
+  });
+
+  it('XP above 2000 goes in several writes', async () => {
+    const { repo, server } = await ready();
+    repo.reward(0, xp(4500));
+    expect(repo.progress().xp).toBe(4500);
+    await settle(30 * 60_000);
+    expect(server.doc('u1').progress.xp).toBe(4500);
+    expect(repo.progress().xp).toBe(4500);
+    expect(server.doc('u1').coins).toBe(repo.load().coins);
+  });
+
+  it('counts the login once the document was read, once per day, on every device', async () => {
+    const { repo, server } = setup();
+    server.seed('u1', { progress: { ...emptyProgress(), streak: 2, lastLogin: TODAY - 1 } });
+    expect(repo.login(TODAY)).toBeNull();
+    repo.setUser('u1');
+    await settle();
+    expect(repo.login(TODAY)).toEqual({ streak: 3, coins: 40 });
+    expect(repo.login(TODAY)).toBeNull();
+    expect(repo.load().coins).toBe(40);
+    await settle(60_000);
+    expect(server.doc('u1')).toMatchObject({ coins: 40, progress: { streak: 3, lastLogin: TODAY } });
+    const other = new FirestoreInventoryRepository({ store: memoryStore(), backend: async () => server });
+    other.setUser('u1');
+    await settle();
+    expect(other.login(TODAY)).toBeNull();
+  });
+
+  it('two devices opened at the same moment are paid one login', async () => {
+    const { repo, server } = await ready();
+    const other = new FirestoreInventoryRepository({ store: memoryStore(), backend: async () => server });
+    other.setUser('u1');
+    await settle();
+    expect(repo.login(TODAY)).not.toBeNull();
+    expect(other.login(TODAY)).not.toBeNull(); // neither knows about the other yet
+    await settle(10 * 60_000);
+    expect(server.doc('u1')).toMatchObject({ coins: 20, progress: { streak: 1 } });
+    expect(repo.load().coins).toBe(20);
+    expect(other.load().coins).toBe(20);
+  });
+
+  it('keeps what was not sent for the next session', async () => {
+    const { repo, server, store } = await ready();
+    server.offline = true;
+    repo.login(TODAY);
+    repo.reward(50, xp(260));
+    await settle(60_000);
+    const next = new FirestoreInventoryRepository({ store, backend: async () => server });
+    const earned = 20 + 50 + chestCoins(2);
+    expect(next.load().coins).toBe(earned);
+    expect(next.progress()).toMatchObject({ xp: 260, level: 2, streak: 1 });
+    server.offline = false;
+    next.setUser('u1');
+    await settle(5 * 60_000);
+    expect(server.doc('u1')).toMatchObject({ coins: earned, progress: { xp: 260, level: 2, streak: 1 } });
+  });
+
+  it('progress made before any account answered goes to the first account that does', async () => {
+    const { repo, server } = setup();
+    repo.reward(0, xp(120));
+    expect(repo.progress().xp).toBe(120);
+    repo.setUser('u1');
+    await settle(INTERVAL_MS + 5000);
+    expect(server.doc('u1').progress.xp).toBe(120);
+    expect(repo.progress().xp).toBe(120);
+  });
+
+  it('each account keeps its own progress', async () => {
+    const { repo, server } = await ready({ progress: { ...emptyProgress(), xp: 300, level: 2 } });
+    server.seed('google', { progress: { ...emptyProgress(), xp: 9000, level: 13 } });
+    let emits = 0;
+    repo.subscribe(() => emits++);
+    repo.setUser('google');
+    await settle();
+    expect(repo.progress()).toMatchObject({ xp: 9000, level: 13 });
+    expect(emits).toBeGreaterThan(0);
+  });
+
+  it('drops tampered progress from the cache', () => {
+    const user = { progress: { xp: 'x' }, gain: { xp: -5, logins: ['x'] }, batch: { coins: 10 }, pending: Number.NaN };
+    const { repo } = setup({ [CLOUD_CACHE_KEY]: JSON.stringify({ last: 'u1', users: { u1: user } }) });
+    expect(repo.progress()).toEqual(emptyProgress());
+    expect(repo.load().coins).toBe(0);
+  });
+});
+
+describe('FirestoreInventoryRepository — achievement items', () => {
+  async function ready() {
+    const all = setup();
+    all.server.seed('u1', { coins: 70 });
+    all.repo.setUser('u1');
+    await settle();
+    return all;
+  }
+
+  it('are released in a write of their own: owned and lastPurchase, coins untouched', async () => {
+    const { repo, server } = await ready();
+    const result = await repo.unlock('cannon_golden');
+    expect(result).toEqual({ ok: true, inventory: expect.objectContaining({ coins: 70, owned: { cannon_golden: true } }) });
+    expect(server.writes).toEqual([{ kind: 'unlock', uid: 'u1', fields: ['lastPurchase', 'owned'], at: NOON }]);
+    expect(server.doc('u1')).toMatchObject({ coins: 70, owned: { cannon_golden: true }, lastPurchase: 'cannon_golden' });
+  });
+
+  it('already released on another device → owned, nothing written', async () => {
+    const { repo, server } = await ready();
+    server.doc('u1').owned = { cannon_golden: true };
+    expect(await repo.unlock('cannon_golden')).toMatchObject({ ok: true });
+    expect(server.writes).toEqual([]);
+    expect(repo.load().owned).toEqual({ cannon_golden: true });
+  });
+
+  it('refused by the rules (not published yet) → nothing changes', async () => {
+    const { repo, server } = await ready();
+    server.refuseUnlocks = true;
+    expect(await repo.unlock('cannon_golden')).toEqual({ ok: false, error: 'refused' });
+    expect(repo.load().owned).toEqual({});
+  });
+
+  it('is offline without an account or a connection', async () => {
+    const { repo, server } = await ready();
+    expect(await setup().repo.unlock('cannon_golden')).toEqual({ ok: false, error: 'offline' });
+    server.offline = true;
+    const pending = repo.unlock('cannon_golden');
+    await settle();
+    expect(await pending).toEqual({ ok: false, error: 'offline' });
+  });
+
+  it('waits its turn: one write at a time', async () => {
+    const { repo, server } = await ready();
+    repo.reward(50);
+    const unlocking = repo.unlock('cannon_golden');
+    const other = repo.unlock('border_golden');
+    await settle(60_000);
+    expect((await unlocking).ok && (await other).ok).toBe(true);
+    expect(server.maxActive).toBe(1);
+    expect(server.kinds().sort()).toEqual(['reward', 'unlock', 'unlock']);
+    expect(server.doc('u1')).toMatchObject({ coins: 120, owned: { cannon_golden: true, border_golden: true } });
   });
 });
 

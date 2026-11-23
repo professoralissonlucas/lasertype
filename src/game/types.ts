@@ -120,6 +120,15 @@ export interface BossConfig {
   readonly maxBonus: number;
 }
 
+/** The typing speed that counts only the time spent typing (game/burst.ts). */
+export interface BurstConfig {
+  /** Words typed in a row that make a burst. */
+  readonly words: number;
+  /** Shorter words are left out. */
+  readonly minLetters: number;
+  readonly maxWpm: number;
+}
+
 export interface ComboTier {
   /** Combo needed for this tier. */
   readonly min: number;

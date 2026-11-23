@@ -79,6 +79,28 @@ export function radioGroup<T extends string>(
   return fieldset;
 }
 
+/** A thin progress bar. Call `set` to move it; `label` is what screen readers announce. */
+export class ProgressBar {
+  readonly root = el('div', 'bar');
+  private readonly fill = el('div', 'bar__fill');
+
+  constructor(className = '') {
+    if (className) this.root.classList.add(className);
+    this.root.setAttribute('role', 'progressbar');
+    this.root.setAttribute('aria-valuemin', '0');
+    this.root.append(this.fill);
+  }
+
+  set(value: number, max: number, label: string): void {
+    const ratio = max > 0 ? Math.min(1, Math.max(0, value / max)) : 0;
+    this.fill.style.width = `${(ratio * 100).toFixed(2)}%`;
+    this.root.classList.toggle('is-full', ratio === 1);
+    this.root.setAttribute('aria-valuemax', String(max));
+    this.root.setAttribute('aria-valuenow', String(Math.min(value, max)));
+    this.root.setAttribute('aria-valuetext', label);
+  }
+}
+
 /** Restarts a CSS animation by removing and re-adding its class. */
 export function replayAnimation(node: HTMLElement, className: string): void {
   node.classList.remove(className);

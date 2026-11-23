@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { uniqueId } from './id.ts';
 import { dayIndex } from './day.ts';
 import { createIntegerFormatter, formatCountdown, formatGameDay, formatPercent, formatTime } from './format.ts';
 import { aimAngle, clamp, lerp } from './math.ts';
@@ -54,5 +55,13 @@ describe('formatCountdown', () => {
     expect(formatCountdown((5 * 3600 + 3 * 60 + 9) * 1000)).toBe('5:03:09');
     expect(formatCountdown(24 * 3600 * 1000)).toBe('24:00:00');
     expect(formatCountdown(-5)).toBe('0:00:00');
+  });
+});
+
+describe('uniqueId', () => {
+  it('is never the same twice', () => {
+    const ids = Array.from({ length: 1000 }, uniqueId);
+    expect(new Set(ids).size).toBe(1000);
+    for (const id of ids) expect(id).toMatch(/^[0-9a-z]{14}$/);
   });
 });

@@ -24,7 +24,7 @@ describe('barrels', () => {
     const twin = cannon('cannon_twin');
     expect([0, 1, 2, 3].map((shot) => barrelOf(twin, shot))).toEqual([0, 1, 0, 1]);
     expect([0, 1].map((shot) => muzzleSideOffset(twin, shot))).toEqual([-TWIN_BARREL_OFFSET, TWIN_BARREL_OFFSET]);
-    for (const id of ['cannon_sentinel', 'cannon_crystal', 'cannon_halo']) {
+    for (const id of ['cannon_sentinel', 'cannon_crystal', 'cannon_halo', 'cannon_golden']) {
       expect(barrelOf(cannon(id), 1), id).toBe(0);
       expect(muzzleSideOffset(cannon(id), 1), id).toBe(0);
     }

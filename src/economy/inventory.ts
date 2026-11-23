@@ -1,6 +1,7 @@
 // Ownership, coins and equipment (pure). Every operation returns a new inventory;
 // persistence lives in repository.ts / firestoreRepository.ts and the glue in Economy.ts.
-import { DEFAULT_ITEM_IDS, getItem, isDefaultItem, isPurchasable } from '../cosmetics/catalog.ts';
+import { DEFAULT_ITEM_IDS, getItem, isAchievementItem, isDefaultItem, isPurchasable } from '../cosmetics/catalog.ts';
+import { ownsTitle } from '../cosmetics/collections.ts';
 import { COSMETIC_TYPES, type CosmeticType } from '../cosmetics/types.ts';
 import type { DailyShop, Equipped, EquipError, Inventory, PurchaseError, Result, ShopOffer } from './types.ts';
 
@@ -8,7 +9,7 @@ export function emptyInventory(): Inventory {
   return { coins: 0, owned: {}, equipped: {}, lastPurchase: null };
 }
 
-/** Default items are owned by everyone; others only once bought. */
+/** Default items are owned by everyone; others only once bought or unlocked. */
 export function isOwned(inventory: Inventory, itemId: string): boolean {
   const item = getItem(itemId);
   if (!item) return false;
@@ -53,6 +54,11 @@ export function applyPurchase(inventory: Inventory, itemId: string, price: numbe
   };
 }
 
+/** The inventory with an achievement item released (what the unlock write sends): free, coins untouched. */
+export function applyUnlock(inventory: Inventory, itemId: string): Inventory {
+  return { ...inventory, owned: { ...inventory.owned, [itemId]: true }, lastPurchase: itemId };
+}
+
 /** Buys an item from today's shop at today's price. */
 export function purchase(inventory: Inventory, shop: DailyShop, itemId: string): Result<PurchaseError> {
   const check = checkPurchase(inventory, shop, itemId);
@@ -88,10 +94,18 @@ export function equip(inventory: Inventory, itemId: string): Result<EquipError> 
   return { ok: true, inventory: { ...inventory, equipped: { ...inventory.equipped, [item.type]: itemId } } };
 }
 
+/** Wears a collection's title (null = none): its whole collection must be owned. */
+export function equipTitle(inventory: Inventory, titleId: string | null): Result<EquipError> {
+  const { title: _, ...rest } = inventory.equipped;
+  if (titleId === null) return { ok: true, inventory: { ...inventory, equipped: rest } };
+  if (!ownsTitle(titleId, (id) => isOwned(inventory, id))) return { ok: false, error: 'notOwned' };
+  return { ok: true, inventory: { ...inventory, equipped: { ...rest, title: titleId } } };
+}
+
 /**
  * Turns whatever was stored (old, partial or tampered with) into a valid inventory:
- * negative/invalid coins become 0, unknown or non-purchasable ids are dropped, and an
- * equipped item must exist, match its category and be owned.
+ * negative/invalid coins become 0, unknown ids and default items are dropped, an equipped item
+ * must exist, match its category and be owned, and a title needs its whole collection.
  */
 export function parseInventory(raw: unknown): Inventory {
   if (typeof raw !== 'object' || raw === null) return emptyInventory();
@@ -104,12 +118,12 @@ export function parseInventory(raw: unknown): Inventory {
   if (typeof data.owned === 'object' && data.owned !== null) {
     for (const [id, value] of Object.entries(data.owned as Record<string, unknown>)) {
       const item = getItem(id);
-      if (value === true && item && isPurchasable(item)) owned[id] = true;
+      if (value === true && item && (isPurchasable(item) || isAchievementItem(item))) owned[id] = true;
     }
   }
   const base: Inventory = { coins, owned, equipped: {}, lastPurchase: null };
 
-  const equipped: Partial<Record<CosmeticType, string>> = {};
+  const equipped: Partial<Record<CosmeticType | 'title', string>> = {};
   if (typeof data.equipped === 'object' && data.equipped !== null) {
     const stored = data.equipped as Record<string, unknown>;
     for (const type of COSMETIC_TYPES) {
@@ -117,6 +131,8 @@ export function parseInventory(raw: unknown): Inventory {
       if (typeof id !== 'string') continue;
       if (getItem(id)?.type === type && isOwned(base, id)) equipped[type] = id;
     }
+    const { title } = stored;
+    if (typeof title === 'string' && ownsTitle(title, (id) => isOwned(base, id))) equipped.title = title;
   }
 
   const last = data.lastPurchase;

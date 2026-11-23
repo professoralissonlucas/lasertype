@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import rules from '../../firestore.rules?raw';
 import { CONFIG } from '../config.ts';
-import { DISCOUNT_ORDER } from '../cosmetics/catalog.ts';
+import { CATALOG, DISCOUNT_ORDER, isAchievementItem } from '../cosmetics/catalog.ts';
 import shopSource from '../economy/shop.ts?raw';
 import { discountedPrice } from '../economy/shop.ts';
 import { bossBonus, bossNumber } from '../game/boss.ts';
@@ -12,10 +12,21 @@ import { comboMultiplier, maxPointsPerSecond, wordPoints } from '../game/scoring
 import { GAME_DIFFICULTIES } from '../game/types.ts';
 import { DAY_MS, DAY_START_OFFSET_MS } from '../utils/day.ts';
 import { waveParams } from '../game/waves.ts';
+import { emptyProgress, loginGain, matchGain, mergeGain } from '../progression/progress.ts';
+import { matchReport } from '../progression/testing.ts';
 import { longestBossPhrase, longestWordLength } from '../words/index.ts';
 import { LANGUAGES } from '../words/types.ts';
 import { buildScore, dailyBoard, MAX_POINTS_PER_SECOND, scoreDocId } from './leaderboard.ts';
-import { dailyBonusFields, equipFields, newUserFields, profileFields, purchaseFields, rewardFields } from './profile.ts';
+import {
+  dailyBonusFields,
+  equipFields,
+  newUserFields,
+  profileFields,
+  purchaseFields,
+  rewardFields,
+  rewardWrite,
+  unlockFields,
+} from './profile.ts';
 import { SHOP, SHOP_CONFIG_ID, shopDocuments } from './shopDocs.ts';
 import { RANKED_MODES } from './types.ts';
 
@@ -151,6 +162,20 @@ describe('users/{uid} writes ↔ firestore.rules', () => {
     expect(fn).toContain('incoming().lastReward == request.time');
   });
 
+  it('reward with XP, level, missions, streak and statistics: the same kind of write, within its limits', () => {
+    const fn = ruleFunction('isReward');
+    const gain = mergeGain(loginGain(20779), matchGain(matchReport({ destroyed: 900, letters: 9000, wave: 30 }), 20779));
+    const before = { coins: 40, progress: emptyProgress() };
+    const { fields, coins, progress } = rewardWrite(before, { id: 'b1', coins: 100, gain }, SERVER_TIME);
+    expect(topLevel(fields)).toEqual(allowedChanges('isReward'));
+    expect(fields.lastReward).toBe(SERVER_TIME);
+    expect(coins - before.coins).toBe(Number(capture(/gain <= (\d+)/, fn)));
+    expect(Number(capture(/xpGain <= (\d+)/, fn))).toBe(CONFIG.sync.maxXpPerWrite);
+    expect(progress.xp).toBeLessThanOrEqual(CONFIG.sync.maxXpPerWrite);
+    expect(fn).toContain('incoming().coins is int');
+    expect(fn).toContain('incoming().xp is int');
+  });
+
   it('Daily Challenge bonus: a reward write that also marks the day paid, within the same limits', () => {
     const fields = dailyBonusFields(40, 150, 20779, SERVER_TIME);
     expect(fields).toEqual({ coins: 190, lastReward: SERVER_TIME, 'stats.dailyDay': 20779 });
@@ -171,8 +196,22 @@ describe('users/{uid} writes ↔ firestore.rules', () => {
     expect(() => purchaseFields(1000, 'a.b', 10)).toThrow();
   });
 
+  it('unlock: exactly one new owned key (= lastPurchase) marked achievement: true in shop/, coins untouched', () => {
+    const fn = ruleFunction('isUnlock');
+    const fields = unlockFields('cannon_golden');
+    expect(fields).toEqual({ 'owned.cannon_golden': true, lastPurchase: 'cannon_golden' });
+    expect(topLevel(fields)).toEqual(allowedChanges('isUnlock'));
+    expect(fn).toContain('ownedDiff.addedKeys().hasOnly([id])');
+    expect(fn).toContain('shopItem(id).achievement == true');
+    expect(() => unlockFields('a.b')).toThrow();
+  });
+
+  it('unlock is checked before purchase (whose price check fails with an error on these items)', () => {
+    expect(rules).toContain('(isReward() || isUnlock() || isPurchase() || isEquip() || isProfile())');
+  });
+
   it('equip: only the equipped map', () => {
-    expect(topLevel(equipFields({ theme: 'theme_void' }))).toEqual(allowedChanges('isEquip'));
+    expect(topLevel(equipFields({ theme: 'theme_void', title: 'title_aurora' }))).toEqual(allowedChanges('isEquip'));
   });
 
   it('profile: only the name (no photo)', () => {
@@ -192,6 +231,19 @@ describe('shop collection (scripts/seed-shop.ts) ↔ firestore.rules', () => {
       expect(Number.isInteger(doc.price) && doc.price > 0).toBe(true);
     }
     expect(docs.config.discountOrder).toEqual(DISCOUNT_ORDER);
+  });
+
+  it('achievement items: marked, and without a price (they can never be bought)', () => {
+    const docs = shopDocuments();
+    const ids = CATALOG.filter(isAchievementItem).map((item) => item.id);
+    expect(Object.keys(docs.achievements)).toEqual(ids);
+    expect(ids).toHaveLength(5);
+    for (const [id, doc] of Object.entries(docs.achievements)) {
+      expect(Object.keys(doc).sort()).toEqual(['achievement', 'rarity', 'type']);
+      expect(doc.achievement).toBe(true);
+      expect(id in docs.items).toBe(false);
+      expect(docs.config.discountOrder).not.toContain(id);
+    }
   });
 });
 

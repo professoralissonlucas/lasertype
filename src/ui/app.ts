@@ -1,15 +1,16 @@
-// Screen switching: menu ↔ settings ↔ shop ↔ ranking ↔ match (HUD, pause, Mission Report).
-// Owns the persisted settings, the economy and the online account, and applies them
-// (volume, effects, language, equipped cosmetics, nickname, ranking submissions).
+// Screen switching: menu ↔ settings ↔ shop ↔ progress ↔ ranking ↔ match (HUD, pause, Mission
+// Report). Owns the persisted settings, the economy and the online account, and applies them
+// (volume, effects, language, equipped cosmetics, nickname, login streak, ranking submissions).
 import type { AudioEngine } from '../audio/AudioEngine.ts';
+import type { SoundName } from '../audio/types.ts';
 import { resolveCosmetics } from '../cosmetics/equip.ts';
 import type { ResolvedCosmetics } from '../cosmetics/types.ts';
-import type { DailyBonus } from '../economy/dailyBonus.ts';
 import { DailyBonusCollector } from '../economy/DailyBonusCollector.ts';
 import { Economy } from '../economy/Economy.ts';
 import type { FirestoreInventoryRepository } from '../economy/firestoreRepository.ts';
 import { sameEquipped } from '../economy/inventory.ts';
 import type { InventoryRepository } from '../economy/repository.ts';
+import type { MatchOutcome } from '../economy/types.ts';
 import type { AuthService, LinkOutcome } from '../firebase/auth.ts';
 import { isRankedMode, type Leaderboard, type MatchResult, type SubmitResult, type Submitter } from '../firebase/leaderboard.ts';
 import { Game, type GameView, type MatchConfig } from '../game/Game.ts';
@@ -26,9 +27,11 @@ import { dailyPlaceText } from './dailyText.ts';
 import { el } from './dom.ts';
 import { Hud } from './hud.ts';
 import { createTranslator, type Translate } from './i18n.ts';
-import { MenuScreen, type MenuChoice } from './menu.ts';
+import { MenuScreen, type MenuChoice, type MenuProgress } from './menu.ts';
 import { NicknameDialog } from './nicknameDialog.ts';
 import { PauseScreen } from './pause.ts';
+import { ProgressScreen } from './progress.ts';
+import { itemFullName, titleText } from './progressText.ts';
 import { RankingScreen, type RankingChoice } from './ranking.ts';
 import { ReportScreen, type RankingLine } from './report.ts';
 import { SettingsScreen } from './settings.ts';
@@ -52,7 +55,16 @@ export interface AppOptions {
   readonly recaptchaNotice: boolean;
 }
 
-type Screen = 'menu' | 'settings' | 'shop' | 'ranking' | 'match';
+type Screen = 'menu' | 'settings' | 'shop' | 'progress' | 'ranking' | 'match';
+
+/** The Mission Report's fanfare waits for the game over notes (ms). */
+const FANFARE_DELAY = 1000;
+
+/** Something to tell the player, never over a running match. */
+interface Notice {
+  readonly text: () => string;
+  readonly sound: SoundName;
+}
 
 interface Screens {
   readonly hud: Hud;
@@ -61,6 +73,7 @@ interface Screens {
   readonly menu: MenuScreen;
   readonly settings: SettingsScreen;
   readonly shop: ShopScreen;
+  readonly progress: ProgressScreen;
   readonly ranking: RankingScreen;
   readonly nickname: NicknameDialog;
   readonly badges: readonly AccountBadge[];
@@ -85,8 +98,8 @@ export class App {
   private readonly leaderboardService: Leaderboard;
   private readonly cloudSync: FirestoreInventoryRepository | null;
   private readonly bonusCollector: DailyBonusCollector | null;
-  /** Daily Challenge bonuses paid during a match, announced when it ends. */
-  private paidBonuses: readonly DailyBonus[] = [];
+  /** What happened during a match (bonuses paid, items unlocked…), announced when it ends. */
+  private notices: readonly Notice[] = [];
   private readonly recaptchaNotice: boolean;
   private readonly toasts = new Toasts();
   private settings: Settings;
@@ -125,24 +138,32 @@ export class App {
     // Rebuilding the skin is not free (sprites, nebula): only when the equipment changed
     // (equipped here, or a cloud version / another account arrived).
     let equipped = this.economyInstance.inventory.equipped;
-    this.economyInstance.subscribe((inventory) => {
+    this.economyInstance.subscribe((inventory, change) => {
       if (!sameEquipped(inventory.equipped, equipped)) {
         equipped = inventory.equipped;
         this.gameInstance.setCosmetics(this.cosmetics());
       }
       this.screens.menu.setCoins(inventory.coins);
+      this.screens.menu.refreshProgress();
+      if (change.type === 'unlock') this.notifyUnlock(change.itemId);
+      if (change.type === 'login') this.notifyLogin(change.streak, change.coins);
     });
     this.screens = this.buildScreens();
     this.authService.subscribe(() => this.onAccountChange());
-    // users/{uid} answered (nickname loaded or edited, account switched): refresh the badges and
-    // look for Daily Challenge bonuses.
+    // users/{uid} answered (nickname loaded or edited, account switched): refresh the badges,
+    // count today's login and look for Daily Challenge bonuses.
     this.cloudSync?.subscribe(() => {
       this.refreshAccount();
-      this.collectBonuses();
+      this.startDay();
     });
-    this.cloudSync?.subscribeBonus((bonus) => {
-      this.paidBonuses = [...this.paidBonuses, bonus];
-      this.announceBonuses();
+    this.cloudSync?.subscribeBonus(({ day, position, coins }) => {
+      this.notify({
+        text: () => {
+          const date = formatGameDay(day, this.settings.language);
+          return this.t('dailyPaid', { date, n: position, coins: this.formatScore(coins) });
+        },
+        sound: 'purchase',
+      });
     });
     this.applySettings();
   }
@@ -208,13 +229,15 @@ export class App {
     pause.setVisible(state.status === 'paused');
     if (state.status === 'gameover') {
       if (!this.reportShown) {
-        // Once per match: credit the coins, show them, then try the global ranking.
+        // Once per match: credit it, show what it earned, then try the global ranking.
         const summary = buildReport(state);
-        const reward = this.economyInstance.rewardMatch(summary);
-        report.show(summary, reward, this.economyInstance.coins);
+        const outcome = this.economyInstance.finishMatch(summary);
+        const { coins, inventory } = this.economyInstance;
+        report.show(summary, outcome, { coins, title: titleText(this.settings.language, inventory.equipped) });
         this.reportShown = true;
+        this.playFanfare(outcome);
         this.submitMatch(summary);
-        this.announceBonuses();
+        this.announce();
       }
     } else if (this.reportShown) {
       report.hide();
@@ -301,22 +324,61 @@ export class App {
     return position === null ? '' : ` ${dailyPlaceText(this.t, this.formatScore, position, score, match.lang)}`;
   }
 
-  // ---------- Daily Challenge bonus ----------
+  // ---------- Daily rewards and notices ----------
+
+  /** Today's login (once per game day) and the Daily Challenge bonuses. Cheap to call often. */
+  private startDay(): void {
+    this.economyInstance.claimLogin();
+    this.collectBonuses();
+  }
 
   /** Closed days of a Google account (only those enter the ranking). Cheap once they are settled. */
   private collectBonuses(): void {
     if (this.authService.account.status === 'google') void this.bonusCollector?.collect();
   }
 
-  /** Announces the bonuses the server paid, never over a running match. */
-  private announceBonuses(): void {
-    if (this.paidBonuses.length === 0 || (this.screen === 'match' && !this.reportShown)) return;
-    for (const { day, position, coins } of this.paidBonuses) {
-      const date = formatGameDay(day, this.settings.language);
-      this.toasts.show(this.t('dailyPaid', { date, n: position, coins: this.formatScore(coins) }));
-    }
-    this.paidBonuses = [];
-    this.audio.play('purchase');
+  private notifyLogin(streak: number, coins: number): void {
+    this.notify({ text: () => this.t('streakClaimed', { n: streak, coins }), sound: 'purchase' });
+  }
+
+  private notifyUnlock(itemId: string): void {
+    const item = () => itemFullName(this.t, this.settings.language, itemId);
+    this.notify({ text: () => this.t('unlockedItem', { item: item() }), sound: 'achievement' });
+  }
+
+  private notify(notice: Notice): void {
+    this.notices = [...this.notices, notice];
+    this.announce();
+  }
+
+  /** Shows the waiting notices, never over a running match. */
+  private announce(): void {
+    const last = this.notices.at(-1);
+    if (!last || (this.screen === 'match' && !this.reportShown)) return;
+    for (const { text } of this.notices) this.toasts.show(text());
+    this.notices = [];
+    this.audio.play(last.sound);
+  }
+
+  /** A short fanfare for what the match completed, after the game over notes. */
+  private playFanfare(outcome: MatchOutcome): void {
+    const { chests, completed, achievements } = outcome;
+    if (chests.length + completed.length + achievements.length === 0) return;
+    const serial = this.matchSerial;
+    window.setTimeout(() => {
+      if (serial === this.matchSerial) this.audio.play(achievements.length > 0 ? 'achievement' : 'levelUp');
+    }, FANFARE_DELAY);
+  }
+
+  private menuProgress(): MenuProgress {
+    const { level, inventory } = this.economyInstance;
+    const missions = this.economyInstance.missions();
+    return {
+      level,
+      title: titleText(this.settings.language, inventory.equipped),
+      missionsDone: missions.filter((mission) => mission.done).length,
+      missions: missions.length,
+    };
   }
 
   // ---------- Account ----------
@@ -394,7 +456,7 @@ export class App {
     // The economy follows the signed-in account (its own users/{uid}).
     this.cloudSync?.setUser(this.authService.account.uid);
     this.refreshAccount();
-    this.collectBonuses();
+    this.startDay();
   }
 
   private refreshAccount(): void {
@@ -413,10 +475,11 @@ export class App {
 
   private show(screen: Screen): void {
     this.screen = screen;
-    const { hud, pause, report, menu, settings, shop, ranking } = this.screens;
+    const { hud, pause, report, menu, settings, shop, progress, ranking } = this.screens;
     menu.setVisible(screen === 'menu');
     settings.setVisible(screen === 'settings');
     shop.setVisible(screen === 'shop');
+    progress.setVisible(screen === 'progress');
     ranking.setVisible(screen === 'ranking');
     hud.setVisible(screen === 'match');
     if (screen !== 'match') {
@@ -426,11 +489,12 @@ export class App {
     }
     if (screen === 'menu') {
       menu.focus();
-      this.collectBonuses(); // the day may have turned since the last time
+      this.startDay(); // the day may have turned since the last time
     }
-    this.announceBonuses();
+    this.announce();
     if (screen === 'settings') settings.focus();
     if (screen === 'shop') shop.focus();
+    if (screen === 'progress') progress.focus();
     if (screen === 'ranking') ranking.focus();
   }
 
@@ -511,21 +575,32 @@ export class App {
         onRestart: () => this.gameInstance.restart(),
         onQuit: () => this.gameInstance.quit(),
       }),
-      report: new ReportScreen(t, formatScore, {
+      report: new ReportScreen(t, this.settings.language, formatScore, {
         onPlayAgain: () => this.gameInstance.restart(),
         onMenu: () => this.toMenu(),
         onSignIn: this.signIn,
       }),
-      menu: new MenuScreen(t, formatScore, this.menuChoice(), this.economyInstance.coins, menuAccount.root, this.recaptchaNotice, {
-        onPlay: (choice) => {
-          this.updateSettings({ ...this.settings, ...choice });
-          this.startMatch();
+      menu: new MenuScreen(
+        t,
+        formatScore,
+        this.menuChoice(),
+        this.economyInstance.coins,
+        menuAccount.root,
+        this.recaptchaNotice,
+        () => this.menuProgress(),
+        {
+          onPlay: (choice) => {
+            this.updateSettings({ ...this.settings, ...choice });
+            this.startMatch();
+          },
+          onChange: (choice) => this.updateSettings({ ...this.settings, ...choice }),
+          onSettings: () => this.show('settings'),
+          onShop: () => this.show('shop'),
+          onProgress: () => this.show('progress'),
+          onRanking: () => this.show('ranking'),
+          onDayChange: () => this.startDay(),
         },
-        onChange: (choice) => this.updateSettings({ ...this.settings, ...choice }),
-        onSettings: () => this.show('settings'),
-        onShop: () => this.show('shop'),
-        onRanking: () => this.show('ranking'),
-      }),
+      ),
       settings: new SettingsScreen(t, this.settings, {
         onChange: (next) => this.updateSettings(next),
         onVolumePreview: () => this.audio.play('shot'),
@@ -539,6 +614,14 @@ export class App {
         sound: this.audio,
         reduceEffects: this.settings.reduceEffects,
         equipped: () => this.cosmetics(),
+        onBack: () => this.show('menu'),
+      }),
+      progress: new ProgressScreen({
+        t,
+        language: this.settings.language,
+        formatNumber: formatScore,
+        economy: this.economyInstance,
+        sound: this.audio,
         onBack: () => this.show('menu'),
       }),
       ranking: new RankingScreen({
@@ -561,6 +644,7 @@ export class App {
       screens.menu.root,
       screens.settings.root,
       screens.shop.root,
+      screens.progress.root,
       screens.ranking.root,
       screens.nickname.root,
       this.toasts.root,
@@ -570,10 +654,11 @@ export class App {
 
   /** Language changed: rebuild every screen in the new language and stay where we were. */
   private rebuildScreens(): void {
-    // Detach the old screens' keyboard listeners (menu Enter, settings/shop/ranking Esc).
+    // Detach the old screens' keyboard listeners (menu Enter, settings/shop/progress/ranking Esc).
     this.screens.menu.setVisible(false);
     this.screens.settings.setVisible(false);
     this.screens.shop.setVisible(false);
+    this.screens.progress.setVisible(false);
     this.screens.ranking.setVisible(false);
     this.screens = this.buildScreens();
     this.refreshAccount();

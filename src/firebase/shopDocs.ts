@@ -1,9 +1,11 @@
 // The read-only `shop` collection that firestore.rules reads to check a purchase
-// (priceFor / discountedId). Written only by scripts/seed-shop.ts (firebase-admin):
-//   shop/{id}     = { price, rarity, type }   for every purchasable item of catalog.ts
-//   shop/_config  = { discountOrder }         = DISCOUNT_ORDER, in the same order
-// Run the script again whenever a price or DISCOUNT_ORDER changes.
-import { CATALOG, DISCOUNT_ORDER, isPurchasable } from '../cosmetics/catalog.ts';
+// (priceFor / discountedId) or an unlock. Written only by scripts/seed-shop.ts (firebase-admin):
+//   shop/{id}     = { price, rarity, type }              for every purchasable item of catalog.ts
+//   shop/{id}     = { achievement: true, rarity, type }  for every achievement item (no price: it
+//                                                        can never be bought)
+//   shop/_config  = { discountOrder }                    = DISCOUNT_ORDER, in the same order
+// Run the script again whenever a price, DISCOUNT_ORDER or the achievement items change.
+import { CATALOG, DISCOUNT_ORDER, isAchievementItem, isPurchasable } from '../cosmetics/catalog.ts';
 import type { CosmeticItem, CosmeticType, Rarity } from '../cosmetics/types.ts';
 
 export const SHOP = 'shop';
@@ -15,6 +17,13 @@ export interface ShopItemDoc {
   readonly type: CosmeticType;
 }
 
+/** An item only an achievement gives. */
+export interface AchievementItemDoc {
+  readonly achievement: true;
+  readonly rarity: Rarity;
+  readonly type: CosmeticType;
+}
+
 export interface ShopConfigDoc {
   readonly discountOrder: readonly string[];
 }
@@ -22,6 +31,7 @@ export interface ShopConfigDoc {
 export interface ShopDocuments {
   /** Keyed by item id. */
   readonly items: Readonly<Record<string, ShopItemDoc>>;
+  readonly achievements: Readonly<Record<string, AchievementItemDoc>>;
   readonly config: ShopConfigDoc;
 }
 
@@ -31,11 +41,14 @@ export function shopDocuments(
   discountOrder: readonly string[] = DISCOUNT_ORDER,
 ): ShopDocuments {
   const items: Record<string, ShopItemDoc> = {};
+  const achievements: Record<string, AchievementItemDoc> = {};
   for (const item of catalog) {
-    if (!isPurchasable(item) || item.price === null) continue;
-    if (!Number.isInteger(item.price)) throw new Error(`shop: ${item.id} has a non-integer price`);
-    if (item.id === SHOP_CONFIG_ID) throw new Error(`shop: ${SHOP_CONFIG_ID} is reserved`);
-    items[item.id] = { price: item.price, rarity: item.rarity, type: item.type };
+    const { id, price, rarity, type } = item;
+    if (id === SHOP_CONFIG_ID) throw new Error(`shop: ${SHOP_CONFIG_ID} is reserved`);
+    if (isAchievementItem(item)) achievements[id] = { achievement: true, rarity, type };
+    if (!isPurchasable(item) || price === null) continue;
+    if (!Number.isInteger(price)) throw new Error(`shop: ${id} has a non-integer price`);
+    items[id] = { price, rarity, type };
   }
   const ids = Object.keys(items);
   const missing = ids.filter((id) => !discountOrder.includes(id));
@@ -43,5 +56,5 @@ export function shopDocuments(
   if (missing.length > 0 || extra.length > 0 || new Set(discountOrder).size !== discountOrder.length) {
     throw new Error(`shop: DISCOUNT_ORDER must list every purchasable item once (missing ${missing.join(', ')}; extra ${extra.join(', ')})`);
   }
-  return { items, config: { discountOrder: [...discountOrder] } };
+  return { items, achievements, config: { discountOrder: [...discountOrder] } };
 }

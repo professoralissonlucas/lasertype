@@ -33,6 +33,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'cannon_twin',
+    set: 'solar',
     type: 'cannon',
     name: { 'pt-BR': 'Gêmeo', en: 'Twin' },
     rarity: 'rare',
@@ -50,6 +51,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'cannon_crystal',
+    set: 'prism',
     type: 'cannon',
     name: { 'pt-BR': 'Cristal', en: 'Crystal' },
     rarity: 'epic',
@@ -67,6 +69,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'cannon_halo',
+    set: 'horizon',
     type: 'cannon',
     name: { 'pt-BR': 'Halo', en: 'Halo' },
     rarity: 'legendary',
@@ -79,6 +82,25 @@ export const CATALOG: readonly CosmeticItem[] = [
       edge: '#2B3646',
       highlight: '#FFFFFF',
       trim: '#22D3EE',
+      opacity: 1,
+    },
+  },
+  {
+    id: 'cannon_golden',
+    set: 'golden',
+    type: 'cannon',
+    name: { 'pt-BR': 'Dourado', en: 'Golden' },
+    rarity: 'legendary',
+    price: null,
+    unlock: 'lightning',
+    // Ceremonial: the Sentinel's bunker in polished gold, with the rail barrel.
+    params: {
+      body: 'armored',
+      barrel: 'rail',
+      hull: ['#4A2E07', '#B07D1E', '#FBE49B'],
+      edge: '#1E1304',
+      highlight: '#FFF6D6',
+      trim: '#FFFDF2',
       opacity: 1,
     },
   },
@@ -101,6 +123,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'theme_aurora',
+    set: 'aurora',
     type: 'theme',
     name: { 'pt-BR': 'Aurora', en: 'Aurora' },
     rarity: 'common',
@@ -116,6 +139,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'theme_supergiant',
+    set: 'solar',
     type: 'theme',
     name: { 'pt-BR': 'Supergigante', en: 'Supergiant' },
     rarity: 'rare',
@@ -131,6 +155,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'theme_void',
+    set: 'horizon',
     type: 'theme',
     name: { 'pt-BR': 'Vazio', en: 'Void' },
     rarity: 'epic',
@@ -142,6 +167,23 @@ export const CATALOG: readonly CosmeticItem[] = [
       nebulaSeed: 'void-nebula',
       starColor: '#C7D2FE',
       grid: { color: '#818CF8', alpha: 0.08, spacing: 56 },
+    },
+  },
+  {
+    id: 'theme_eclipse',
+    set: 'golden',
+    type: 'theme',
+    name: { 'pt-BR': 'Eclipse', en: 'Eclipse' },
+    rarity: 'epic',
+    price: null,
+    unlock: 'frontline',
+    params: {
+      background: '#060405',
+      nebula: ['#E0A030', '#5B3FA8'],
+      nebulaAlpha: 0.2,
+      nebulaSeed: 'eclipse-nebula',
+      starColor: '#FFF3CF',
+      grid: { color: '#D9A441', alpha: 0.05, spacing: 72 },
     },
   },
 
@@ -156,6 +198,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'laser_emerald',
+    set: 'aurora',
     type: 'laserColor',
     name: { 'pt-BR': 'Esmeralda', en: 'Emerald' },
     rarity: 'common',
@@ -164,6 +207,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'laser_violet',
+    set: 'prism',
     type: 'laserColor',
     name: { 'pt-BR': 'Violeta', en: 'Violet' },
     rarity: 'common',
@@ -172,11 +216,22 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'laser_plasma',
+    set: 'horizon',
     type: 'laserColor',
     name: { 'pt-BR': 'Plasma', en: 'Plasma' },
     rarity: 'rare',
     price: price('rare'),
     params: { core: '#FFFFFF', glow: '#60A5FA', width: 1.6 },
+  },
+  {
+    id: 'laser_aurum',
+    set: 'golden',
+    type: 'laserColor',
+    name: { 'pt-BR': 'Áureo', en: 'Aurum' },
+    rarity: 'epic',
+    price: null,
+    unlock: 'flawless',
+    params: { core: '#FFFBEB', glow: '#FCD34D', width: 1.3 },
   },
 
   // ---------- Explosion ----------
@@ -202,6 +257,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'explosion_supernova',
+    set: 'solar',
     type: 'explosion',
     name: { 'pt-BR': 'Supernova', en: 'Supernova' },
     rarity: 'rare',
@@ -222,6 +278,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'explosion_disintegrate',
+    set: 'prism',
     type: 'explosion',
     name: { 'pt-BR': 'Desintegração', en: 'Disintegration' },
     rarity: 'epic',
@@ -242,6 +299,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'explosion_implosion',
+    set: 'horizon',
     type: 'explosion',
     name: { 'pt-BR': 'Implosão', en: 'Implosion' },
     rarity: 'legendary',
@@ -260,6 +318,28 @@ export const CATALOG: readonly CosmeticItem[] = [
       ringScale: 1.2,
     },
   },
+  {
+    id: 'explosion_fireworks',
+    set: 'golden',
+    type: 'explosion',
+    name: { 'pt-BR': 'Fogos', en: 'Fireworks' },
+    rarity: 'epic',
+    price: null,
+    unlock: 'bossHunter',
+    params: {
+      main: '#FDE047',
+      accent: '#4ADE80',
+      letters: 'scatter',
+      debris: 'spark',
+      debrisCount: 1.9,
+      debrisSpeed: 1.15,
+      gravity: 1.5,
+      inward: false,
+      embers: 2,
+      rings: 1,
+      ringScale: 1.4,
+    },
+  },
 
   // ---------- Word border ----------
   {
@@ -272,6 +352,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'border_chamfer',
+    set: 'solar',
     type: 'wordBorder',
     name: { 'pt-BR': 'Chanfrada', en: 'Chamfered' },
     rarity: 'common',
@@ -280,6 +361,7 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'border_brackets',
+    set: 'aurora',
     type: 'wordBorder',
     name: { 'pt-BR': 'Colchetes', en: 'Brackets' },
     rarity: 'common',
@@ -288,11 +370,23 @@ export const CATALOG: readonly CosmeticItem[] = [
   },
   {
     id: 'border_circuit',
+    set: 'prism',
     type: 'wordBorder',
     name: { 'pt-BR': 'Circuito', en: 'Circuit' },
     rarity: 'rare',
     price: price('rare'),
     params: { shape: 'circuit', color: '#A78BFA', alpha: 0.6, width: 1 },
+  },
+  {
+    id: 'border_golden',
+    set: 'golden',
+    type: 'wordBorder',
+    name: { 'pt-BR': 'Dourada', en: 'Golden' },
+    rarity: 'epic',
+    price: null,
+    unlock: 'loyal',
+    // Pale on purpose: bomb words are the amber ones.
+    params: { shape: 'chamfer', color: '#EAD9A0', alpha: 0.8, width: 1.5 },
   },
 ];
 
@@ -340,6 +434,11 @@ export function isDefaultItem(item: CosmeticItem): boolean {
 /** Items the shop can sell (priced; not default, not achievement-only). */
 export function isPurchasable(item: CosmeticItem): boolean {
   return item.price !== null && item.price > 0;
+}
+
+/** Items only an achievement gives (never sold). */
+export function isAchievementItem(item: CosmeticItem): boolean {
+  return item.price === null;
 }
 
 /** The default item id of each category. */

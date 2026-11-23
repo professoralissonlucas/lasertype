@@ -1,16 +1,19 @@
 // users/{uid}: the player's account document. firestore.rules is the contract: the document
 // is created once (coins 0, xp 0, owned {}, lastReward = request.time) and every later write
 // is exactly ONE of the rules' update kinds, carrying only that kind's fields:
-//   reward    coins, lastReward               (the rules also allow xp, level, stats, streak, lastLogin)
-//             + stats.dailyDay for a Daily Challenge bonus (in a transaction: never paid twice)
+//   reward    coins, xp, level, streak, lastLogin, stats.*, lastReward (in a transaction), or
+//             coins, lastReward, stats.dailyDay for a Daily Challenge bonus (never paid twice)
 //   purchase  coins, owned.<id>, lastPurchase (in a transaction: the price must be exact)
-//   equip     equipped
+//   unlock    owned.<id>, lastPurchase        (achievement items: free)
+//   equip     equipped                        (one item per category, and the title)
 //   profile   name                            (photo is never sent: no Google photo)
 // The field builders are pure; rules.test.ts checks them against firestore.rules.
-// Missions, streak and XP: for now only their fields exist (created, never updated).
-import { emptyInventory, parseInventory } from '../economy/inventory.ts';
+import { CONFIG } from '../config.ts';
+import { applyUnlock, emptyInventory, parseInventory } from '../economy/inventory.ts';
 import type { Equipped, Inventory } from '../economy/types.ts';
 import { isValidNickname } from '../profile/nickname.ts';
+import { applyGain, emptyProgress, parseProgress, STAT_KEYS } from '../progression/progress.ts';
+import type { Progress, ProgressGain } from '../progression/types.ts';
 import type { FirebaseSdk } from './app.ts';
 
 export const USERS = 'users';
@@ -18,6 +21,9 @@ export const USERS = 'users';
 /** users/{uid} as the client reads it (parsed tolerantly: it is untrusted input). */
 export interface UserSnapshot {
   readonly inventory: Inventory;
+  readonly progress: Progress;
+  /** stats.batch: id of the last reward batch written; null = none yet. */
+  readonly batch: string | null;
   /** null = missing or not a valid nickname (callers fall back to the default). */
   readonly name: string | null;
   /** Server time of the last reward write (or of the creation) in ms; null when unknown. */
@@ -57,7 +63,54 @@ export function newUserFields<T>(name: string, now: T): NewUserFields<T> {
   };
 }
 
-/** Reward write: the new balance and lastReward = serverTimestamp(). */
+/** Earned and not sent yet: frozen with an id, so a retry after a lost answer is not paid twice. */
+export interface RewardBatch {
+  readonly id: string;
+  /** Match coins. */
+  readonly coins: number;
+  readonly gain: ProgressGain;
+}
+
+/** Progress as it is stored: `missions` and `owed` go inside `stats` (field paths: the rest of it stays). */
+export function progressFields(progress: Progress): Readonly<Record<string, unknown>> {
+  const { xp, level, streak, lastLogin, stats, missions, owed } = progress;
+  return {
+    xp,
+    level,
+    streak,
+    lastLogin,
+    ...Object.fromEntries(STAT_KEYS.map((key) => [`stats.${key}`, stats[key]])),
+    'stats.missions': missions && { day: missions.day, progress: [...missions.progress], paid: [...missions.paid] },
+    'stats.owed': owed,
+  };
+}
+
+/**
+ * Reward write: applies the batch on top of the server's progress. Everything it earns (match
+ * coins, chests, missions, streak) is credited to `owed` with its marks, and up to `maxCoins`
+ * of it is paid now; the rest stays owed in the document, for the next writes.
+ */
+export function rewardWrite<T>(
+  before: { readonly coins: number; readonly progress: Progress },
+  batch: RewardBatch,
+  now: T,
+  maxCoins: number = CONFIG.sync.maxRewardPerWrite,
+) {
+  const applied = applyGain(before.progress, batch.gain).progress;
+  const owed = applied.owed + batch.coins;
+  const paid = Math.min(owed, maxCoins);
+  const coins = before.coins + paid;
+  const progress: Progress = { ...applied, owed: owed - paid };
+  const fields: Readonly<Record<string, unknown>> = {
+    coins,
+    ...progressFields(progress),
+    'stats.batch': batch.id,
+    lastReward: now,
+  };
+  return { fields, coins, paid, progress };
+}
+
+/** Reward write with coins only: the new balance and lastReward = serverTimestamp(). */
 export function rewardFields<T>(coins: number, amount: number, now: T): { readonly coins: number; readonly lastReward: T } {
   return { coins: coins + amount, lastReward: now };
 }
@@ -84,6 +137,12 @@ const SAFE_ID = /^[A-Za-z0-9_]+$/;
 export function purchaseFields(coins: number, itemId: string, price: number): Readonly<Record<string, number | string | boolean>> {
   if (!SAFE_ID.test(itemId)) throw new Error(`profile: unsafe item id ${itemId}`);
   return { coins: coins - price, [`owned.${itemId}`]: true, lastPurchase: itemId };
+}
+
+/** Unlock write: one new `owned` key (= lastPurchase). Free: coins must not change. */
+export function unlockFields(itemId: string): Readonly<Record<string, string | boolean>> {
+  if (!SAFE_ID.test(itemId)) throw new Error(`profile: unsafe item id ${itemId}`);
+  return { [`owned.${itemId}`]: true, lastPurchase: itemId };
 }
 
 /** Equip write: the whole `equipped` map (missing category = its default). */
@@ -114,9 +173,11 @@ export function parseUserDoc(data: unknown): UserSnapshot {
   const d = isRecord(data) ? data : {};
   const inventory = parseInventory({ coins: d.coins, owned: d.owned, equipped: d.equipped, lastPurchase: d.lastPurchase });
   const name = typeof d.name === 'string' && isValidNickname(d.name) ? d.name : null;
-  const dailyDay = isRecord(d.stats) ? d.stats.dailyDay : null;
+  const { dailyDay, batch } = isRecord(d.stats) ? d.stats : {};
   return {
     inventory,
+    progress: parseProgress(d),
+    batch: typeof batch === 'string' ? batch : null,
     name,
     lastReward: timestampMillis(d.lastReward),
     dailyDay: typeof dailyDay === 'number' && Number.isInteger(dailyDay) ? dailyDay : null,
@@ -135,6 +196,17 @@ export interface PurchaseAttempt {
   readonly snapshot: UserSnapshot;
 }
 
+export interface UnlockAttempt {
+  readonly kind: 'unlocked' | 'owned';
+  readonly snapshot: UserSnapshot;
+}
+
+export interface RewardAttempt {
+  /** 'alreadyWritten': this batch had reached the server before (its answer was lost). */
+  readonly kind: 'written' | 'alreadyWritten';
+  readonly snapshot: UserSnapshot;
+}
+
 export interface DailyBonusAttempt {
   /** 'alreadyPaid': this day (or a later one) was paid before, e.g. on another device. */
   readonly kind: 'paid' | 'alreadyPaid';
@@ -145,12 +217,14 @@ export interface DailyBonusAttempt {
 export interface UserBackend {
   /** Reads users/{uid}, creating it first when missing (one transaction). */
   open(uid: string, name: string): Promise<OpenedUser>;
-  /** Reward write (transaction): adds `amount` coins. Resolves with the document after it. */
-  reward(uid: string, amount: number): Promise<UserSnapshot>;
+  /** Reward write (transaction) of a batch, unless it was already written. */
+  reward(uid: string, batch: RewardBatch): Promise<RewardAttempt>;
   /** Reward write (transaction) with the Daily Challenge bonus of `day`, unless already paid. */
   dailyBonus(uid: string, day: number, amount: number): Promise<DailyBonusAttempt>;
   /** Purchase write (transaction), checked against the server's coins and items. */
   purchase(uid: string, itemId: string, price: number): Promise<PurchaseAttempt>;
+  /** Unlock write (transaction) of an achievement item, unless already owned. */
+  unlock(uid: string, itemId: string): Promise<UnlockAttempt>;
   /** Equip write. */
   equip(uid: string, equipped: Equipped): Promise<void>;
   /** Profile write. */
@@ -167,16 +241,21 @@ export function firestoreUserBackend(sdk: FirebaseSdk): UserBackend {
         const snap = await tx.get(ref(uid));
         if (snap.exists()) return { snapshot: parseUserDoc(snap.data()), created: false };
         tx.set(ref(uid), newUserFields(name, dbApi.serverTimestamp()));
-        return { snapshot: { inventory: emptyInventory(), name, lastReward: null, dailyDay: null }, created: true };
+        const progress = emptyProgress();
+        const snapshot = { inventory: emptyInventory(), progress, batch: null, name, lastReward: null, dailyDay: null };
+        return { snapshot, created: true };
       }),
-    reward: (uid, amount) =>
-      dbApi.runTransaction(db, async (tx): Promise<UserSnapshot> => {
+    reward: (uid, batch) =>
+      dbApi.runTransaction(db, async (tx): Promise<RewardAttempt> => {
         const snap = await tx.get(ref(uid));
         if (!snap.exists()) throw missing();
         const before = parseUserDoc(snap.data());
-        const fields = rewardFields(before.inventory.coins, amount, dbApi.serverTimestamp());
-        tx.update(ref(uid), fields);
-        return { ...before, inventory: { ...before.inventory, coins: fields.coins }, lastReward: null };
+        if (before.batch === batch.id) return { kind: 'alreadyWritten', snapshot: before };
+        const server = { coins: before.inventory.coins, progress: before.progress };
+        const { fields, coins, progress } = rewardWrite(server, batch, dbApi.serverTimestamp());
+        tx.update(ref(uid), { ...fields });
+        const inventory: Inventory = { ...before.inventory, coins };
+        return { kind: 'written', snapshot: { ...before, inventory, progress, batch: batch.id, lastReward: null } };
       }),
     dailyBonus: (uid, day, amount) =>
       dbApi.runTransaction(db, async (tx): Promise<DailyBonusAttempt> => {
@@ -205,6 +284,15 @@ export function firestoreUserBackend(sdk: FirebaseSdk): UserBackend {
           lastPurchase: itemId,
         };
         return { kind: 'bought', snapshot: { ...before, inventory } };
+      }),
+    unlock: (uid, itemId) =>
+      dbApi.runTransaction(db, async (tx): Promise<UnlockAttempt> => {
+        const snap = await tx.get(ref(uid));
+        if (!snap.exists()) throw missing();
+        const before = parseUserDoc(snap.data());
+        if (before.inventory.owned[itemId]) return { kind: 'owned', snapshot: before };
+        tx.update(ref(uid), unlockFields(itemId));
+        return { kind: 'unlocked', snapshot: { ...before, inventory: applyUnlock(before.inventory, itemId) } };
       }),
     equip: async (uid, equipped) => {
       await dbApi.updateDoc(ref(uid), equipFields(equipped));

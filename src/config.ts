@@ -3,6 +3,7 @@ import type { DailyBonusConfig, EconomyConfig, SyncConfig } from './economy/type
 import type { RankingConfig } from './firebase/types.ts';
 import type {
   BossConfig,
+  BurstConfig,
   ComboConfig,
   DifficultyPreset,
   GameDifficulty,
@@ -12,6 +13,7 @@ import type {
   SpecialConfig,
   WaveConfig,
 } from './game/types.ts';
+import type { ProgressionConfig } from './progression/types.ts';
 import type { Language } from './words/types.ts';
 
 /**
@@ -104,6 +106,9 @@ const SCORING: ScoringConfig = {
   areaKillFactor: 0.5,
 };
 
+/** Burst WPM: 10 words in a row, counting only the time from the first to the last letter of each. */
+const BURST: BurstConfig = { words: 10, minLetters: 3, maxWpm: 250 };
+
 /** Menu difficulty: applied on top of the wave-1 spawn settings (the wave curve stays the same). */
 const DIFFICULTY: Readonly<Record<GameDifficulty, DifficultyPreset>> = {
   easy: { speed: 0.8, interval: 1.2, easyShift: 0.15 },
@@ -158,12 +163,73 @@ const DAILY_BONUS: DailyBonusConfig = {
 };
 
 /**
- * Cloud sync of users/{uid}. The first two numbers are reward limits of firestore.rules (the
+ * Progression. Every single award (chest, streak day, mission) is at most 150 coins: it fits in
+ * one reward write (sync.maxRewardPerWrite).
+ * - XP per match: letters + 2 × words + 50 × bosses, up to 1000, × the mode factor (Zen 25%).
+ *   Level n costs 200 + 100 × (n − 1) XP; a chest of 40 + 5 × level coins (up to 150) each.
+ * - Mission targets: a 35 WPM player on Normal types about 260 letters (46 words) per match,
+ *   with a combo around 7, ~3900 points and wave 4–5; on Easy, nearly twice that.
+ */
+const PROGRESSION: ProgressionConfig = {
+  xp: {
+    perLetter: 1,
+    perWord: 2,
+    perBoss: 50,
+    maxPerMatch: 1000,
+    modeFactor: { survival: 1, timeAttack: 1, daily: 1, zen: 0.25 },
+  },
+  level: { firstCost: 200, costStep: 100 },
+  chest: { base: 40, perLevel: 5, max: 150 },
+  streakCoins: [20, 30, 40, 60, 80, 110, 150],
+  missions: {
+    slots: [
+      // Volume: just play.
+      {
+        coins: 30,
+        pool: [
+          { metric: 'words', targets: [60, 80, 100] },
+          { metric: 'letters', targets: [300, 400, 500] },
+          { metric: 'games', targets: [3, 4, 5] },
+          { metric: 'score', targets: [5000, 8000, 10000] },
+        ],
+      },
+      // Skill: one good match.
+      {
+        coins: 40,
+        pool: [
+          { metric: 'combo', targets: [6, 8, 10] },
+          { metric: 'accuracy', targets: [88, 90, 92] },
+          { metric: 'matchScore', targets: [2000, 3000, 4000] },
+          { metric: 'burst', targets: [20, 25, 30] },
+        ],
+      },
+      // Challenge.
+      {
+        coins: 50,
+        pool: [
+          { metric: 'wave', targets: [4, 5, 6] },
+          { metric: 'bosses', targets: [1] },
+          { metric: 'emp', targets: [2, 3] },
+          { metric: 'dailyScore', targets: [1500, 2500] },
+          { metric: 'timeAttackScore', targets: [1000, 1500] },
+        ],
+      },
+    ],
+    minWordsPlayed: 10,
+    minWordsAccuracy: 25,
+  },
+  // Burst WPM, wave, combo, bosses in total, days in a row.
+  achievements: { lightning: 100, frontline: 10, flawless: 30, bossHunter: 10, loyal: 7 },
+};
+
+/**
+ * Cloud sync of users/{uid}. The first three numbers are reward limits of firestore.rules (the
  * contract; firebase/rules.test.ts fails if they drift apart): one reward write adds at most
- * 150 coins and needs 30 s since the previous one. Coins beyond that wait as pending.
+ * 150 coins and 2000 XP and needs 30 s since the previous one. What is beyond that waits.
  */
 const SYNC: SyncConfig = {
   maxRewardPerWrite: 150,
+  maxXpPerWrite: 2000,
   rewardIntervalSeconds: 30,
   /** Extra wait on top of the interval (client and server clocks differ a little). */
   rewardMarginMs: 2000,
@@ -204,10 +270,12 @@ export const CONFIG = {
   boss: BOSS,
   combo: COMBO,
   scoring: SCORING,
+  burst: BURST,
   difficulty: DIFFICULTY,
   grading: GRADING,
   economy: ECONOMY,
   dailyBonus: DAILY_BONUS,
+  progression: PROGRESSION,
   sync: SYNC,
   ranking: RANKING,
 } as const;

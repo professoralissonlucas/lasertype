@@ -9,6 +9,7 @@ const NAMES = Object.keys(DEFAULT_SOUNDS) as SoundName[];
 describe('default sound recipes', () => {
   it('cover every sound the game plays', () => {
     expect(NAMES.sort()).toEqual([
+      'achievement',
       'armor',
       'bomb',
       'bossAlert',
@@ -21,6 +22,7 @@ describe('default sound recipes', () => {
       'explosion',
       'freeze',
       'gameover',
+      'levelUp',
       'miss',
       'multiplier',
       'purchase',

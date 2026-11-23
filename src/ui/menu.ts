@@ -1,14 +1,16 @@
 // Main menu: mode, difficulty and language, then Play. Enter anywhere in the form plays.
 // The Daily Challenge card counts down to the next one and locks the difficulty (the player's
 // own choice comes back with the other modes).
-// Also shows the coin balance and the account, and leads to the shop, ranking and settings.
+// Also shows the coin balance, the level, today's missions and the account, and leads to the
+// shop, progress, ranking and settings.
 import { GAME_DIFFICULTIES, type GameDifficulty } from '../game/types.ts';
 import { MODES } from '../modes/index.ts';
 import { MODE_IDS, type ModeId } from '../modes/types.ts';
-import { msUntilNextDay } from '../utils/day.ts';
+import type { LevelProgress } from '../progression/xp.ts';
+import { dayIndex, msUntilNextDay } from '../utils/day.ts';
 import { formatCountdown } from '../utils/format.ts';
 import { LANGUAGES, type Language } from '../words/types.ts';
-import { button, el, externalLink, radioGroup } from './dom.ts';
+import { button, el, externalLink, ProgressBar, radioGroup } from './dom.ts';
 import { DIFFICULTY_LABEL, LANGUAGE_NAME, MODE_DESCRIPTION, MODE_LABEL, type Translate } from './i18n.ts';
 
 export interface MenuChoice {
@@ -17,12 +19,24 @@ export interface MenuChoice {
   readonly language: Language;
 }
 
+/** The line under the title. */
+export interface MenuProgress {
+  readonly level: LevelProgress;
+  /** Title being worn, null without one. */
+  readonly title: string | null;
+  readonly missionsDone: number;
+  readonly missions: number;
+}
+
 export interface MenuCallbacks {
   onPlay(choice: MenuChoice): void;
   onChange(choice: MenuChoice): void;
   onSettings(): void;
   onShop(): void;
+  onProgress(): void;
   onRanking(): void;
+  /** The game day turned while the menu was open. */
+  onDayChange(): void;
 }
 
 /** Countdown refresh. */
@@ -52,6 +66,13 @@ export class MenuScreen {
   private readonly walletValue: HTMLElement;
   private readonly difficulty: HTMLFieldSetElement;
   private readonly countdown = el('span', 'choice__note');
+  private readonly progress: () => MenuProgress;
+  private readonly callbacks: MenuCallbacks;
+  private readonly levelName = el('span', 'menu__level');
+  private readonly titleBadge = el('span', 'title-badge');
+  private readonly levelBar = new ProgressBar();
+  private readonly missions = el('span', 'menu__missions');
+  private day = dayIndex(Date.now());
   private tickTimer: number | null = null;
 
   constructor(
@@ -61,11 +82,14 @@ export class MenuScreen {
     coins: number,
     account: HTMLElement,
     recaptchaNotice: boolean,
+    progress: () => MenuProgress,
     callbacks: MenuCallbacks,
   ) {
     this.t = t;
     this.formatNumber = formatNumber;
     this.choice = initial;
+    this.progress = progress;
+    this.callbacks = callbacks;
     this.root = el('section', 'screen menu');
     this.root.setAttribute('aria-labelledby', 'menu-title');
 
@@ -80,7 +104,10 @@ export class MenuScreen {
     const header = el('header', 'menu__header');
     const title = el('h1', 'menu__title', 'Laser Type');
     title.id = 'menu-title';
-    header.append(title, el('p', 'menu__tagline', t('tagline')));
+    const summary = el('div', 'menu__progress');
+    summary.append(this.levelName, this.titleBadge, this.levelBar.root, this.missions);
+    header.append(title, el('p', 'menu__tagline', t('tagline')), summary);
+    this.refreshProgress();
 
     const form = el('form', 'menu__form');
     this.form = form;
@@ -130,6 +157,7 @@ export class MenuScreen {
     actions.append(
       this.playButton,
       button('btn', t('shop'), () => callbacks.onShop()),
+      button('btn', t('progress'), () => callbacks.onProgress()),
       button('btn', t('ranking'), () => callbacks.onRanking()),
       button('btn', t('settings'), () => callbacks.onSettings()),
     );
@@ -150,6 +178,17 @@ export class MenuScreen {
     this.wallet.setAttribute('aria-label', `${this.t('coins')}: ${text}`);
   }
 
+  refreshProgress(): void {
+    const { level, title, missionsDone, missions } = this.progress();
+    const xp = this.t('levelXp', { into: this.formatNumber(level.into), cost: this.formatNumber(level.cost) });
+    this.levelName.textContent = this.t('level', { n: level.level });
+    this.levelBar.set(level.into, level.cost, xp);
+    this.titleBadge.hidden = title === null;
+    this.titleBadge.textContent = title ?? '';
+    this.missions.textContent = this.t('menuMissions', { n: missionsDone, max: missions });
+    this.missions.classList.toggle('is-done', missionsDone === missions);
+  }
+
   setVisible(visible: boolean): void {
     this.root.hidden = !visible;
     if (this.tickTimer !== null) window.clearInterval(this.tickTimer);
@@ -164,6 +203,12 @@ export class MenuScreen {
   }
 
   private readonly tick = (): void => {
+    const day = dayIndex(Date.now());
+    if (day !== this.day) {
+      this.day = day;
+      this.refreshProgress(); // new missions
+      this.callbacks.onDayChange();
+    }
     this.countdown.textContent = this.t('dailyNext', { time: formatCountdown(msUntilNextDay(Date.now())) });
   };
 

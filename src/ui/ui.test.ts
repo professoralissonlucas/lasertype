@@ -2,8 +2,11 @@ import { describe, expect, it } from 'vitest';
 import { LANGUAGES } from '../words/types.ts';
 import { createBoss } from '../game/boss.ts';
 import { CombatLogModel, logEntryOf } from './combatLog.ts';
+import { ACHIEVEMENTS } from '../progression/achievements.ts';
+import { dailyMissions } from '../progression/missions.ts';
 import { dailyPlaceText } from './dailyText.ts';
 import { createTranslator, interpolate, STRING_KEYS } from './i18n.ts';
+import { achievementDescription, achievementName, itemFullName, missionText, titleText } from './progressText.ts';
 
 describe('i18n', () => {
   const pt = createTranslator('pt-BR');
@@ -51,6 +54,36 @@ describe('dailyPlaceText', () => {
     }
     expect(dailyPlaceText(pt, String, 1, 5000, 'en')).toBe('Você está em 1º hoje.');
     expect(dailyPlaceText(pt, String, 1, 10, 'pt-BR')).toBe('Você está em 1º hoje.');
+  });
+});
+
+describe('progress texts', () => {
+  const pt = createTranslator('pt-BR');
+
+  it('fill every placeholder of every mission and achievement, in every language', () => {
+    for (const lang of LANGUAGES) {
+      const t = createTranslator(lang);
+      for (let day = 20_000; day < 20_060; day++) {
+        for (const mission of dailyMissions(day)) {
+          const text = missionText(t, String, mission);
+          expect(text).not.toMatch(/[{}]/);
+          expect(text).toContain(String(mission.target));
+        }
+      }
+      for (const entry of ACHIEVEMENTS) {
+        expect(achievementName(t, entry).length).toBeGreaterThan(0);
+        expect(achievementDescription(t, entry)).toContain(String(entry.target));
+      }
+    }
+  });
+
+  it('name items with their category and titles in the interface language', () => {
+    expect(itemFullName(pt, 'pt-BR', 'cannon_golden')).toBe('Canhão Dourado');
+    expect(itemFullName(pt, 'pt-BR', 'nope')).toBe('');
+    expect(titleText('pt-BR', { title: 'title_aurora' })).toBe('Vigia da Aurora');
+    expect(titleText('en', { title: 'title_aurora' })).toBe('Aurora Watch');
+    expect(titleText('pt-BR', {})).toBeNull();
+    expect(titleText('pt-BR', { title: 'title_nope' })).toBeNull();
   });
 });
 

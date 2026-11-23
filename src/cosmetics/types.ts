@@ -9,6 +9,10 @@ export type CosmeticType = (typeof COSMETIC_TYPES)[number];
 export const RARITIES = ['common', 'rare', 'epic', 'legendary'] as const;
 export type Rarity = (typeof RARITIES)[number];
 
+/** Sets of items (cosmetics/collections.ts): owning all of them gives a title. */
+export const COLLECTION_IDS = ['aurora', 'solar', 'prism', 'horizon', 'golden'] as const;
+export type CollectionId = (typeof COLLECTION_IDS)[number];
+
 /** Item names are part of the data (adding an item never touches ui/i18n.ts). */
 export type LocalizedText = Readonly<Record<Language, string>>;
 
@@ -128,10 +132,9 @@ interface CatalogEntry<T extends CosmeticType> {
   readonly rarity: Rarity;
   /** 0 = default item, owned by everyone · null = only through an achievement. */
   readonly price: number | null;
-  /** Achievement id, when applicable. */
+  /** Achievement id (progression/achievements.ts), for items with price null. */
   readonly unlock?: string;
-  /** Collection. */
-  readonly set?: string;
+  readonly set?: CollectionId;
   readonly params: CosmeticParams[T];
 }
 

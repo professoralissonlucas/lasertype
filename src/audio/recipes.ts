@@ -205,6 +205,32 @@ export const DEFAULT_SOUNDS: SoundPack = {
     ],
   },
 
+  // Level up, mission complete: rising fifth with a coin shimmer (the chest).
+  levelUp: {
+    pitchJitter: 0,
+    cooldown: 0.5,
+    layers: [
+      { kind: 'tone', wave: 'triangle', freq: 440, attack: 0.004, duration: 0.14, gain: 0.1 },
+      { kind: 'tone', wave: 'triangle', freq: 659, attack: 0.004, duration: 0.14, gain: 0.1, delay: 0.1 },
+      { kind: 'tone', wave: 'triangle', freq: 880, attack: 0.004, duration: 0.45, gain: 0.12, delay: 0.2 },
+      { kind: 'tone', wave: 'sine', freq: 2637, attack: 0.003, duration: 0.3, gain: 0.03, delay: 0.24 },
+      { kind: 'noise', filter: 'highpass', cutoff: 6000, attack: 0.005, duration: 0.25, gain: 0.03, delay: 0.2 },
+    ],
+  },
+
+  // Achievement: a slow golden fanfare over a soft swell.
+  achievement: {
+    pitchJitter: 0,
+    cooldown: 0.8,
+    layers: [
+      { kind: 'tone', wave: 'triangle', freq: 523, attack: 0.006, duration: 0.2, gain: 0.1 },
+      { kind: 'tone', wave: 'triangle', freq: 784, attack: 0.006, duration: 0.2, gain: 0.1, delay: 0.14 },
+      { kind: 'tone', wave: 'triangle', freq: 1047, attack: 0.006, duration: 0.8, gain: 0.12, delay: 0.28 },
+      { kind: 'tone', wave: 'sine', freq: 1319, attack: 0.006, duration: 0.8, gain: 0.06, delay: 0.28 },
+      { kind: 'noise', filter: 'bandpass', cutoff: 1200, cutoffEnd: 5000, q: 1, attack: 0.1, duration: 0.7, gain: 0.04, delay: 0.1 },
+    ],
+  },
+
   // Cosmetic equipped: short rising click.
   equip: {
     pitchJitter: 0,
